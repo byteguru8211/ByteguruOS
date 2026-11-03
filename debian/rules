@@ -1,14 +1,17 @@
 #!/usr/bin/make -f
-# Сборка: C-компонент через meson, Python-пакеты копируются явно (см. *.install).
+# Сборка ByteguruOS: C-компонент через meson, python-пакеты и данные копируются
+# явно в debian/tmp, откуда их забирают *.install.
 #
-# Явное копирование вместо dh_python3 выбрано сознательно: четыре независимых
-# python-пакета в четырёх каталогах src/*/*/, и «умный» helper неизбежно смешал
-# бы их в один каталог или потерял часть.
+# Buildsystem=none выбран специально: debhelper по автоопределению не находит
+# meson.build в корне (он в src/compositor) и мог бы начать собирать несуществующий
+# Makefile. Явное раскладывание по каталогам дешевле, чем четыре независимых
+# python-пакета, которые «умный» helper неминуемо смешал бы в один.
 
 export DEB_BUILD_MAINT_OPTIONS = hardening=+all
+TMP = $(CURDIR)/debian/tmp
 
 %:
-	dh $@
+	dh $@ --buildsystem=none
 
 override_dh_auto_configure:
 	meson setup src/compositor build-deb/compositor --prefix=/usr --buildtype=plain
@@ -22,7 +25,22 @@ ifeq (,$(filter nocheck,$(DEB_BUILD_OPTIONS)))
 endif
 
 override_dh_auto_install:
-	DESTDIR=$(CURDIR)/debian/tmp ninja -C build-deb/compositor install
+	rm -rf $(TMP)
+	mkdir -p $(TMP)/usr/bin $(TMP)/usr/lib/python3/dist-packages \
+		$(TMP)/usr/share/byteguru/wincompat $(TMP)/usr/share/byteguru/theme \
+		$(TMP)/usr/share/applications $(TMP)/usr/share/wayland-sessions \
+		$(TMP)/usr/lib/systemd/user
+	DESTDIR=$(TMP) ninja -C build-deb/compositor install
+	cp bin/bglauncher bin/bgpanel bin/bgsettings bin/bgfirstboot \
+	   bin/bgd bin/wcmgr bin/bginstaller $(TMP)/usr/bin/
+	cp -r src/wincompat/wcmgr src/installer/bginstaller src/bytegurud/bgd src/shell/bgshell \
+	   $(TMP)/usr/lib/python3/dist-packages/
+	find $(TMP) -name '__pycache__' -type d -prune -exec rm -rf {} +
+	cp data/wincompat/*.wcv $(TMP)/usr/share/byteguru/wincompat/
+	cp data/desktop/*.desktop $(TMP)/usr/share/applications/
+	cp data/wayland-sessions/*.desktop $(TMP)/usr/share/wayland-sessions/
+	cp data/systemd/user/*.service $(TMP)/usr/lib/systemd/user/
+	cp src/shell/bgshell/ui/theme/*.css $(TMP)/usr/share/byteguru/theme/
 
 clean:
 	dh_clean

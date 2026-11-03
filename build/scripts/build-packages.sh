@@ -25,7 +25,9 @@ if [[ "$(uname -s)" != "Linux" ]]; then
 	exit 3
 fi
 
-for tool in dpkg-buildpackage debhelper dh meson ninja pkg-config; do
+# Проверяем только исполняемые файлы: debhelper — имя пакета, команды с таким
+# именем нет, и проверка «есть ли debhelper» давала бы ложный отказ.
+for tool in dpkg-buildpackage dh meson ninja pkg-config; do
 	command -v "${tool}" >/dev/null 2>&1 || {
 		echo "не найден ${tool}: установка пакета не выполнена" >&2
 		exit 4

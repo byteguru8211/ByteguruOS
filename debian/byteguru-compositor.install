@@ -1,1 +1,1 @@
-build-deb/compositor/bgwl usr/bin
+usr/bin/bgwl usr/bin

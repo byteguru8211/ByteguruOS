@@ -1,5 +1,5 @@
-data/wincompat usr/share/byteguru
-data/desktop usr/share/applications
-data/systemd/user usr/lib/systemd/user
-data/wayland-sessions usr/share/wayland-sessions
-src/shell/bgshell/ui/theme usr/share/byteguru
+usr/share/byteguru/wincompat usr/share/byteguru
+usr/share/byteguru/theme usr/share/byteguru
+usr/share/applications usr/share
+usr/share/wayland-sessions usr/share
+usr/lib/systemd/user usr/lib/systemd
