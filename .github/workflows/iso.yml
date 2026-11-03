@@ -119,7 +119,7 @@ jobs:
         if: failure()
         run: |
           set -uo pipefail
-          log="build/.debtmp/build-packages.log"
+          log="build/.debwork/build-packages.log"
           {
             echo "## Diagnosis: сборка пакетов"
             echo

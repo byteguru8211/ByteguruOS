@@ -12,6 +12,8 @@ htmlcov/
 
 # Локальные артефакты сборки образа и rootfs — никогда не попадают в git
 output/
+build/.debwork/
+build/.debtmp/
 iso-build/
 chroot/
 *.iso

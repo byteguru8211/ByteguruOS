@@ -46,33 +46,38 @@ if [[ "${BG_SKIP_COMPOSITOR:-0}" == "1" ]]; then
 	export BG_SKIP_COMPOSITOR=1
 fi
 
-BUILD_TMP="${SRC_DIR}/build/.debtmp"
-mkdir -p "${BUILD_TMP}"
+# У dpkg-buildpackage нет опции «каталог вывода»: результаты пишутся в каталог,
+# родительский по отношению к дереву исходников. Поэтому дерево копируется в
+# staging, а .deb забираются из ${STAGE}/.
+STAGE="${SRC_DIR}/build/.debwork"
+rm -rf "${STAGE}"
+mkdir -p "${STAGE}/byteguru"
+tar -C "${SRC_DIR}" \
+	--exclude='./.git' --exclude='./build' --exclude='./.venv' \
+	--exclude='./output' --exclude='*__pycache__*' \
+	-cf - . | tar -C "${STAGE}/byteguru" -xf -
 
-# Вывод сборки пишется и в терминал, и в файл: лог прогона GitHub доступен только
-# по авторизации, а хвост ошибки из артефакта видит кто угодно (см. шаг
-# «Диагностика» в .github/workflows/iso.yml).
-LOG="${BUILD_TMP}/build-packages.log"
+LOG="${STAGE}/build-packages.log"
 : > "${LOG}"
 
 echo ">>> dpkg-buildpackage (лог: ${LOG})"
-if ! dpkg-buildpackage -us -uc "${BUILD_ARGS[@]}" \
-	--output-directory="${BUILD_TMP}" 2>&1 | tee "${LOG}"; then
+if ! (cd "${STAGE}/byteguru" && dpkg-buildpackage -us -uc "${BUILD_ARGS[@]}") 2>&1 | tee "${LOG}"; then
 	rc="${PIPESTATUS[0]}"
 	echo "сборка пакетов не удалась (код ${rc}); последние строки лога:" >&2
 	tail -n 40 "${LOG}" >&2
 	# Хвост ошибки уходит в аннотацию прогона: лог GitHub отдаёт только по
 	# авторизации, а аннотации видны на публичной странице — иначе первый сбой
 	# нечем разобрать без токена.
-	tail_line="$(tail -n 6 "${LOG}" | tr '\n' ' ' | sed -e 's/%/%25/g' -e 's/|/%7C/g' | cut -c1-700)"
+	tail_line="$(tail -n 8 "${LOG}" | tr '\n' ' ' | sed -e 's/%/%25/g' -e 's/|/%7C/g' | cut -c1-700)"
 	echo "::error::dpkg-buildpackage, код ${rc}: ${tail_line}"
 	exit 5
 fi
 
 shopt -s nullglob
-debs=("${BUILD_TMP}"/*.deb)
+debs=("${STAGE}"/*.deb)
 if [[ ${#debs[@]} -eq 0 ]]; then
 	echo "deb-файлы не созданы" >&2
+	echo "::error::dpkg-buildpackage завершился без ошибки, но .deb не появились" >&2
 	exit 6
 fi
 
