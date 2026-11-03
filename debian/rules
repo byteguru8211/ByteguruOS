@@ -3,8 +3,8 @@
 # явно в debian/tmp, откуда их забирают *.install.
 #
 # Buildsystem=none выбран специально: debhelper по автоопределению не находит
-# meson.build в корне (он в src/compositor) и мог бы начать собирать несуществующий
-# Makefile. Явное раскладывание по каталогам дешевле, чем четыре независимых
+# meson.build в корне (он в src/compositor) и начал бы собирать несуществующий
+# Makefile. Явное раскладывание по каталогам честнее, чем четыре независимых
 # python-пакета, которые «умный» helper неминуемо смешал бы в один.
 
 export DEB_BUILD_MAINT_OPTIONS = hardening=+all
@@ -51,6 +51,17 @@ endif
 	cp data/wayland-sessions/*.desktop $(TMP)/usr/share/wayland-sessions/
 	cp data/systemd/user/*.service $(TMP)/usr/lib/systemd/user/
 	cp src/shell/bgshell/ui/theme/*.css $(TMP)/usr/share/byteguru/theme/
+
+override_dh_install:
+ifneq ($(SKIP_COMPOSITOR),1)
+	dh_install
+else
+	# Без собранного bgwl его install-список ссылается на несуществующий файл, и
+	# dh_install прерывает сборку. Пустой пакет разрешён маркером
+	# debian/byteguru-compositor.empty.
+	rm -f debian/byteguru-compositor.install
+	dh_install
+endif
 
 clean:
 	dh_clean
