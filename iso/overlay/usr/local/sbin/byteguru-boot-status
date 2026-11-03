@@ -19,6 +19,21 @@ REPAIR_TOOL="byteguru-boot-repair"
 LABEL_DEFAULT="ByteguruOS"
 
 LABEL="${LABEL_DEFAULT}"
+
+# Ожидаемая метка — из того же файла, что читает byteguru-boot-repair:
+# диагностика и ремонт должны судить об одном и том же. Флаг --label ниже имеет
+# приоритет над файлом, поэтому source выполняется до разбора аргументов.
+# note: [ -n ... ] && ... в конце блока вернул бы nonzero и уронил бы скрипт при
+# set -e, поэтому присваивания оформлены через if.
+EFI_POLICY="/usr/share/byteguru/efi/efi-boot-policy.env"
+if [ -r "${EFI_POLICY}" ]; then
+	# shellcheck disable=SC1090
+	. "${EFI_POLICY}"
+	if [ -n "${BYTEGURU_EFI_LABEL:-}" ]; then
+		LABEL="${BYTEGURU_EFI_LABEL}"
+	fi
+fi
+
 ESP_OVERRIDE=""
 VERBOSE=0
 problems=0
@@ -45,13 +60,6 @@ note_problem() { printf 'ПРОБЛЕМА: %s\n' "$*" >&2; problems=$((problems 
 
 # Вспомогательная печать «есть/нет» — стабильный формат, чтобы на него мог
 # опереться человек, снимающий скриншот для баг-репорта.
-yn() {
-	if [ "$1" = "0" ]; then
-		printf 'да\n'
-	else
-		printf 'НЕТ\n'
-	fi
-}
 
 while [ "$#" -gt 0 ]; do
 	case "$1" in

@@ -231,16 +231,13 @@ fi
 if [ -n "${LOADER_OVERRIDE}" ]; then
 	LOADER_EFI="${LOADER_OVERRIDE}"
 else
-	# Кандидаты в порядке предпочтения. Пути реальные для Debian-семейства:
-	#   EFI\byteguru\*  — наш будущий пакет grub-efi с собственной директорией;
+	# Кандидаты — из efi-boot-policy.env (см. EFI_POLICY выше), в порядке
+	# предпочтения. Пути реальные для Debian-семейства:
+	#   EFI\byteguru\*  — наш путь (grub-install --bootloader-id=byteguru);
 	#   EFI\debian\*    — как кладёт grub-efi-amd64 по умолчанию (и live-build);
 	#   EFI\boot\bootx64.efi — removable-путь, который прошивка использует,
 	#                     когда запись в NVRAM вообще не создавалась.
-	for cand in \
-		"EFI/byteguru/grubx64.efi" \
-		"EFI/byteguru/bootx64.efi" \
-		"EFI/debian/grubx64.efi" \
-		"EFI/boot/bootx64.efi"; do
+	for cand in ${LOADER_CANDIDATES}; do
 		if [ -f "${ESP_MOUNT}/${cand}" ]; then
 			LOADER_EFI="\\${cand}"
 			say "найден загрузчик: ${LOADER_EFI}"
@@ -253,7 +250,12 @@ if [ -z "${LOADER_EFI}" ]; then
 	die "на ${ESP_DEV} нет известного EFI-загрузчика. Установите его (grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id=byteguru) или передайте --loader явно; содержимое ESP покажет ${STATUS_TOOL}."
 fi
 # EFI хочет обратные слеши.
-LOADER_ARG="$(printf '%s' "${LOADER_EFI}" | tr '/' '\\')"
+# EFI требует обратных слэшей в пути загрузчика. Варианты проверены побайтово:
+#   - ${VAR//\//\\} — НЕ работает (bash не разбирает такую кавычку: unexpected EOF);
+#   - tr '/' '\\'   — даёт верный результат, но tr ругается на «unescaped
+#                    backslash at end of string is not portable»;
+#   - sed 's|/|\\\\|g' — верный результат и тихий вывод, его и используем.
+LOADER_ARG="$(printf '%s' "${LOADER_EFI}" | sed 's|/|\\\\|g')"
 
 # --- есть ли уже наша запись -----------------------------------------------------
 # Парсим_plain_`efibootmgr` (без -v): строки вида "Boot0001* ByteguruOS".
