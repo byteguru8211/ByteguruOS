@@ -10,14 +10,22 @@
 export DEB_BUILD_MAINT_OPTIONS = hardening=+all
 TMP = $(CURDIR)/debian/tmp
 
+# Композитор ни разу не компилировался: его ошибка не должна блокировать образ,
+# где есть оболочка, WinCompat и установщик.
+SKIP_COMPOSITOR ?= $(BG_SKIP_COMPOSITOR)
+
 %:
 	dh $@ --buildsystem=none
 
 override_dh_auto_configure:
+ifneq ($(SKIP_COMPOSITOR),1)
 	meson setup src/compositor build-deb/compositor --prefix=/usr --buildtype=plain
+endif
 
 override_dh_auto_build:
+ifneq ($(SKIP_COMPOSITOR),1)
 	ninja -C build-deb/compositor
+endif
 
 override_dh_auto_test:
 ifeq (,$(filter nocheck,$(DEB_BUILD_OPTIONS)))
@@ -30,7 +38,9 @@ override_dh_auto_install:
 		$(TMP)/usr/share/byteguru/wincompat $(TMP)/usr/share/byteguru/theme \
 		$(TMP)/usr/share/applications $(TMP)/usr/share/wayland-sessions \
 		$(TMP)/usr/lib/systemd/user
+ifneq ($(SKIP_COMPOSITOR),1)
 	DESTDIR=$(TMP) ninja -C build-deb/compositor install
+endif
 	cp bin/bglauncher bin/bgpanel bin/bgsettings bin/bgfirstboot \
 	   bin/bgd bin/wcmgr bin/bginstaller $(TMP)/usr/bin/
 	cp -r src/wincompat/wcmgr src/installer/bginstaller src/bytegurud/bgd src/shell/bgshell \

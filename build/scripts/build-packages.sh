@@ -37,6 +37,15 @@ done
 mkdir -p "${OUT_DIR}"
 rm -f "${OUT_DIR}"/*.deb
 
+# Композитор — единственный C-компонент дерева, и он ни разу не компилировался.
+# Его ошибка не должна блокировать образ, в котором есть оболочка, WinCompat и
+# установщик: для прогона образа ставьте BG_SKIP_COMPOSITOR=1.
+BUILD_ARGS=(--build=full)
+if [[ "${BG_SKIP_COMPOSITOR:-0}" == "1" ]]; then
+	echo ">>> композитор bgwl пропускается (BG_SKIP_COMPOSITOR=1)"
+	export BG_SKIP_COMPOSITOR=1
+fi
+
 BUILD_TMP="${SRC_DIR}/build/.debtmp"
 mkdir -p "${BUILD_TMP}"
 
@@ -47,11 +56,16 @@ LOG="${BUILD_TMP}/build-packages.log"
 : > "${LOG}"
 
 echo ">>> dpkg-buildpackage (лог: ${LOG})"
-if ! dpkg-buildpackage -us -uc --build=full \
+if ! dpkg-buildpackage -us -uc "${BUILD_ARGS[@]}" \
 	--output-directory="${BUILD_TMP}" 2>&1 | tee "${LOG}"; then
 	rc="${PIPESTATUS[0]}"
 	echo "сборка пакетов не удалась (код ${rc}); последние строки лога:" >&2
 	tail -n 40 "${LOG}" >&2
+	# Хвост ошибки уходит в аннотацию прогона: лог GitHub отдаёт только по
+	# авторизации, а аннотации видны на публичной странице — иначе первый сбой
+	# нечем разобрать без токена.
+	tail_line="$(tail -n 6 "${LOG}" | tr '\n' ' ' | sed -e 's/%/%25/g' -e 's/|/%7C/g' | cut -c1-700)"
+	echo "::error::dpkg-buildpackage, код ${rc}: ${tail_line}"
 	exit 5
 fi
 
