@@ -1,0 +1,80 @@
+# ByteguruOS — базовый набор live-системы.
+#
+# Каталог config/package-lists/ — правильное место для списков пакетов в
+# live-build 3.x (НЕ config/packages/): файл *.list.chroot устанавливает пакеты
+# в корневую FS образа, *.list.binary — только в бинарный образ. Отдельный
+# каталог config/packages.chroot/ (через точку) — это папка для НАШИХ .deb-файлов,
+# live-build ставит их напрямую, без apt.
+#
+# Имена проверялись по packages.debian.org для trixie; всё, в чём есть сомнение,
+# закомментировано с меткой "TODO-VERIFY" — лучше потерять пакет, чем уронить
+# сборку несуществующим именем.
+
+# --- live-механика -------------------------------------------------------------
+# live-build, как правило, сам добавляет live-boot/live-config из своего skeleton;
+# явное перечисление безвредно и зато гарантирует, что образ остаётся live.
+# Имя подтверждено: live-boot 1:20250815~deb13u1 есть в trixie (зависимость
+# live-boot-initramfs-tools, поэтому initramfs-tools ниже не случаен).
+live-boot
+live-config
+live-tools
+
+# --- ядро ----------------------------------------------------------------------
+# Штатное ядро Debian. Наш kernel.defconfig (build/configs/kernel.defconfig)
+# собирается в отдельный пакет позже; здесь он не участвует, чтобы первая сборка
+# ISO не зависела от сборки нашего ядра.
+linux-image-amd64
+initramfs-tools
+
+# --- базовая инфраструктура ----------------------------------------------------
+apt
+apt-utils
+sudo
+ca-certificates
+curl
+wget
+gnupg
+less
+nano
+vim-tiny
+procps
+psmisc
+util-linux
+findutils
+grep
+sed
+coreutils
+bash-completion
+man-db
+file
+rsync
+pciutils
+usbutils
+dmidecode
+strace
+
+# --- локализация/время/клавиатура (см. также hooks и includes.chroot/etc) ------
+locales
+tzdata
+console-setup
+keyboard-configuration
+xkb-data
+fonts-liberation
+fonts-dejavu-core
+# Кириллица в текстовой консоли (без X):
+xfonts-terminus
+
+# --- сеть (нужна и в live-сессии, и будущему установщику) ----------------------
+network-manager
+iproute2
+iputils-ping
+iw
+wpasupplicant
+
+# --- осознанно НЕ включено -----------------------------------------------------
+# calamares — см. auto/config: выбран документированный ручной путь установки.
+# virtualbox-guest-utils / -x11 / -dkms — в trixie таких пакетов НЕТ (проверено
+# поиском по packages.debian.org: из этой серии там только
+# virtualbox-guest-additions-iso из non-free). Модули vboxguest/vboxsf/vboxvideo
+# берём из ядра Debian, пользователями shared folder занимается
+# /usr/local/bin/byteguru-vboxsf-mount из overlay.

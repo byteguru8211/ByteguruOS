@@ -1,0 +1,22 @@
+# Шаблон списка apt для БУДУЩЕГО репозитория ByteguruOS.
+#
+# ПОЧЕМУ ЭТОТ ФАЙЛ ЖИВЁТ В config/archives.sample/, А НЕ В config/archives/
+# live-build сканирует config/archives/ по суффиксам *.list.chroot /
+# *.list.binary / *.key.chroot / *.key.binary (точные глобы зависят от версии).
+# Список репозитория БЕЗ парного файла ключа — это ошибка сборки (или, что хуже,
+# небезопасный источник). Поэтому «голый» .list в config/archives/ мы не держим:
+# заготовка лежит здесь и переносится на место только вместе с ключом.
+#
+# КАК ПОДКЛЮЧИТЬ (когда появится репозиторий):
+#   1. cp config/archives.sample/byteguru.list.chroot config/archives/
+#   2. cp config/archives.sample/byteguru.key.chroot   config/archives/
+#      (оба сразу; суффикс .chroot — действует на стадии chroot, .binary добавит
+#       источник в apt-списки самого live-образа)
+#   3. убедиться, что в auto/config стоит --apt-secure true (это значение по умолчанию).
+#
+# Формат .list — обычный sources.list: одна строка deb на строку, # — комментарий.
+#
+# URL ниже — заглушка: репозиторий ещё не опубликован, поэтому файл не подключён.
+
+# deb http://repo.byteguruos.org/debian trixie main contrib non-free
+# deb-src http://repo.byteguruos.org/debian trixie main

@@ -1,0 +1,94 @@
+#!/bin/sh
+# auto/config — единственная точка настройки live-build для ByteguruOS.
+#
+# ВАЖНО ПРО СРЕДНУЮ СБОРКИ: этот файл исполняется на Ubuntu 24.04 в GitHub Actions
+# (см. .github/workflows/iso.yml), потому что на машине разработчика (Windows) нет
+# ни WSL, ни docker, ни xorriso. Живой build тут невозможен — это осознанно.
+#
+# Версия live-build на Ubuntu 24.04 = 3.0~a57 (существенно старее stable-ветки из
+# Debian trixie). Поэтому ниже используются ТОЛЬКО опции, зафиксированные в man
+# lb_config(1) (проверено по справочной странице trixie):
+#   --architecture (ЕДИНСТВЕННОЕ число, не --architectures!)
+#   --binary-image (ЕДИНСТВЕННОЕ число, не --binary-images!)
+#   --bootloaders   значения: grub-legacy|grub-pc|syslinux|grub-efi
+#   --compression   значения: bzip2|gzip|lzip|xz|none  (zstd в списке man нет!)
+# Всё, в чём есть хоть малейшее сомнение, оставлено на значение по умолчанию и
+# прокомментировано — лишний флаг, которого нет в данной версии, уронил бы сборку.
+
+set -eu
+
+# --- ПИН СУИТА (защита от переименования релиза) --------------------------------
+# Имя релиза живёт здесь; проверка его доступности на зеркале выполняется в
+# build/scripts/build-iso.sh (curl dists/<suite>/Release) — это защита от
+# ситуации, когда Debian переименовал/заморозил суит и сборка падает непонятно где.
+BYTEGURU_SUITE="trixie"
+BYTEGURU_MIRROR="http://deb.debian.org/debian/"
+
+# --security/--updates включают debian-security и -updates в источнике chroot.
+# Для live-образа это спорно (образ должен быть воспроизводим), но на первом
+# этапе нам нужна рабочая система с исправлениями безопасности, а pinning по
+# времени сборки («snapshot») — работа последующих этапов.
+lb config noauto \
+	--mode debian \
+	--architecture amd64 \
+	--distribution "${BYTEGURU_SUITE}" \
+	--binary-image iso-hybrid \
+	--chroot-filesystem squashfs \
+	--archive-areas "main contrib non-free non-free-firmware" \
+	--mirror-bootstrap "${BYTEGURU_MIRROR}" \
+	--mirror-chroot "${BYTEGURU_MIRROR}" \
+	--mirror-binary "${BYTEGURU_MIRROR}" \
+	--security true \
+	--updates true \
+	--debian-installer none \
+	--apt-recommends false \
+	--apt-indices false \
+	--cache false \
+	--compression xz \
+	--iso-volume "ByteguruOS" \
+	--iso-application "ByteguruOS" \
+	--iso-preparer "ByteguruOS project" \
+	--iso-publisher "ByteguruOS project; https://github.com/byteguru8211/ByteguruOS" \
+	--bootappend-live "boot=live components hostname=byteguru username=byteguru" \
+	"$@"
+
+# --- Пояснения к «странным» решениям ---------------------------------------------
+#
+# --archive-areas: в trixie зона несвободных прошивок называется
+# "non-free-firmware" (не "nonfree"), она обязательна для iwlwifi/amdgpu/rtw88.
+#
+# --debian-installer none: d-i нам не нужен. Установщик будет свой; сейчас
+# отдаём предпочтение ДОКУМЕНТИРОВАННОМУ РУЧНОМУ пути установки
+# (см. /usr/share/doc/byteguruos/INSTALL.txt в overlay), а не calamares.
+# calamares 3.3.14-1 в trixie СУЩЕСТВУЕТ (проверено по packages.debian.org), но
+# требует branding/module-конфига, Qt-зависимостей и ручного тестирования — это
+# больше риск, чем ценность на первом образе. Решение зафиксировано здесь, чтобы
+# его нельзя было потерять.
+#
+# --apt-recommends false: иначе live-образ раздуется из-за recommends у
+# task-xfce-desktop и network-manager.
+#
+# --cache false: воспроизводимость важнее скорости. Кэш стадий (cache/*.binary.tar)
+# в CI легко «отравляется» и потом часами отлаживается. Если сборка станет
+# слишком долгой — включить осознанно вместе с ключом кэша по hash от
+# config/package-lists/*.
+#
+# --bootloaders НЕ указан. Для amd64 + iso-hybrid live-build сам берёт
+# isolinux/syslinux (BIOS) + grub-efi (UEFI), и это то, что нам нужно: гибрид
+# должен стартовать в VirtualBox и по BIOS (Legacy), и по UEFI. Явное значение
+# рискованно, потому что в разных версиях live-build BIOS-загрузчик называется
+# то "isolinux", то "syslinux" (в man trixie — syslinux).
+#
+# --compression xz вместо zstd: значения zstd в lb_config(1) trixie нет, а
+# неподдерживаемое значение = ошибка сборки.
+#
+# --linux-packages НЕ указан: по умолчанию live-build ставит linux-image-<flavour>,
+# то есть ядро Debian. Собственное ядро из build/configs/kernel.defconfig
+# подключается позже — через config/archives/*.list.template (наш репозиторий)
+# и пакет byteguru-kernel-6.x-amd64. Точное имя пакета ядра ещё не выбрано,
+# выдумывать его не будем.
+#
+# boot=live и hostname/username — параметры live-boot/live-config; значения по
+# умолчанию нас устраивают, перечислены явно для читаемости. Если live-config в
+# этой версии не читает "username=", пользователь live-сессии просто назовётся
+# "user" — не критично, но перед релизом сверить с live-config(7).

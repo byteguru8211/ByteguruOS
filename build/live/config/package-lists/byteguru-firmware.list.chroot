@@ -1,0 +1,38 @@
+# ByteguruOS — несвободные прошивки и поддерживаемое железо.
+#
+# Работает только при --archive-areas, включающем non-free-firmware (см.
+# auto/config). Без этих пакетов Wi-Fi Intel/Realtek и AMD GPU в live-образе
+# не поднимутся, а первое впечатление от дистрибутива будет «нет Wi-Fi».
+
+firmware-iwlwifi
+firmware-amd-graphics
+firmware-misc-nonfree
+firmware-realtek
+firmware-atheros
+firmware-brcm80211
+
+# --- инструменты диагностики железа в live-сессии ------------------------------
+hdparm
+smartmontools
+lshw
+ethtool
+inotify-tools
+
+# --- VirtualBox (тестовый стенд автора) -----------------------------------------
+# Пакетов virtualbox-guest-utils/-x11/-dkms в trixie НЕТ (проверено поиском по
+# packages.debian.org: из серии там только virtualbox-guest-additions-iso в
+# non-free). Поэтому:
+#   * drm/vboxvideo, vboxguest, vboxsf — берём как модули ядра Debian;
+#   * авто-монтаж shared folder — скрипт overlay /usr/local/bin/byteguru-vboxsf-mount
+#     + systemd-юнит byteguru-vboxsf.service;
+#   * полный гостевой стек Oracle (drag&drop, 3D, изменение разрешения) ставится
+#     пользователем вручную из Guest Additions ISO; в образ не включаем —
+#     non-free + нужен dkms в рантайме.
+
+# --- TODO-VERIFY (сверить со списком пакетов trixie перед релизом) -------------
+# firmware-mediatek     — прошивки для mt76 (Wi-Fi 6 MediaTek). Имя пакета не
+#                         проверял; без него mt76 работает только с чипами, чьи
+#                         прошивки уже в firmware-misc-nonfree.
+# firmware-intelwimax   — устаревшие WiMAX-адаптеры, вряд ли нужен.
+# xserver-xorg-video-nouveau входит в xserver-xorg-core зависимости из task-*,
+# отдельно не просим.

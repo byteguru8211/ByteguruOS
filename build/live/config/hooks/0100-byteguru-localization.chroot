@@ -1,0 +1,71 @@
+#!/bin/sh
+# Хук live-build: локализация/таймзона/раскладка + включение наших systemd-юнитов.
+#
+# Имя 0100-*.chroot означает: исполнить в chroot на стадии "chroot", уже после
+# распада includes.chroot (наши файлы из iso/overlay лежат в /etc) и после
+# установки пакетов из package-lists. live-build требует, чтобы хук был
+# исполняемым; build/scripts/build-iso.sh выставляет бит +x при синхронизации
+# дерева, потому что git-clone на Windows его не восстанавливает.
+#
+# Почему не apt-пакет byteguru-config: на первом этапе конфиги живут прямо в
+# overlay, это видно глазами и не требует сборки .deb.
+
+set -eu
+
+# --- локаль: ru_RU.UTF-8 по умолчанию, en_US.UTF-8 доступна --------------------
+# Файл /etc/locale.gen уже лежит в overlay (iso/overlay/etc/locale.gen), здесь
+# только запускаем генерацию. locale-gen входит в пакет locales.
+if [ -x /usr/sbin/locale-gen ] || command -v locale-gen >/dev/null 2>&1; then
+	locale-gen >/dev/null 2>&1 || echo "ХУК: locale-gen завершился ошибкой (продолжаем)" >&2
+else
+	echo "ХУК: locale-gen не найден — пакет locales не установлен?" >&2
+fi
+
+# /etc/default/locale — перезаписываем целиком, чтобы не зависеть от порядка
+# вызовов update-locale. LANG=ru_RU.UTF-8: владелец проекта работает в ru-локали,
+# en_US остаётся сгенерированной для отладки и для отчётов об ошибках.
+cat >/etc/default/locale <<'EOF'
+LANG=ru_RU.UTF-8
+LANGUAGE=ru
+LC_NUMERIC=ru_RU.UTF-8
+LC_TIME=ru_RU.UTF-8
+LC_MONETARY=ru_RU.UTF-8
+LC_PAPER=ru_RU.UTF-8
+LC_NAME=ru_RU.UTF-8
+LC_ADDRESS=ru_RU.UTF-8
+LC_TELEPHONE=ru_RU.UTF-8
+LC_MEASUREMENT=ru_RU.UTF-8
+LC_IDENTIFICATION=ru_RU.UTF-8
+EOF
+
+# --- часовая пояcь --------------------------------------------------------------
+# Europe/Moscow по умолчанию (см. /etc/timezone в overlay). /etc/localtime —
+# symlink, который перезаписывает tzdata; переконфигурируем пакет, чтобы он не
+# «починил» себя обратно при первой же установке.
+if [ -e /usr/sbin/dpkg-reconfigure ]; then
+	ln -sf /usr/share/zoneinfo/Europe/Moscow /etc/localtime
+	DEBIAN_FRONTEND=noninteractive dpkg-reconfigure -f noninteractive tzdata \
+		>/dev/null 2>&1 || echo "ХУК: dpkg-reconfigure tzdata не удался (не критично)" >&2
+fi
+
+# --- клавиатура -----------------------------------------------------------------
+# Конфиг /etc/default/keyboard (pc105, us,ru + переключение alt_shift_toggle)
+# лежит в overlay; console-setup и keyboard-configuration читают именно его.
+# Здесь пересобираем консольную карту, чтобы кириллица была видна в VT до X.
+if command -v setupcon >/dev/null 2>&1; then
+	setupcon --save >/dev/null 2>&1 || echo "ХУК: setupcon --save пропущен (в chroot без tty это норма)" >&2
+fi
+
+# --- наши systemd-юниты ---------------------------------------------------------
+# Включаем байтами, а не systemctl: в chroot нет PID 1 и часть операций
+# systemctl просто не прошла бы. ln -sf идемпотентен.
+mkdir -p /etc/systemd/system/multi-user.target.wants
+ln -sf /etc/systemd/system/byteguru-vboxsf.service \
+	/etc/systemd/system/multi-user.target.wants/byteguru-vboxsf.service
+
+# --- права на sbin-хелперы ------------------------------------------------------
+chmod 0755 /usr/local/sbin/byteguru-boot-repair 2>/dev/null || true
+chmod 0755 /usr/local/sbin/byteguru-boot-status 2>/dev/null || true
+chmod 0755 /usr/local/bin/byteguru-vboxsf-mount 2>/dev/null || true
+
+exit 0

@@ -1,0 +1,56 @@
+# ByteguruOS — инструменты dual boot с Windows и ручного пути установки.
+#
+# Это исполнительная часть требования «первоклассный сосед с Windows»: без этих
+# пакетов скрипты из overlay (byteguru-boot-repair / byteguru-boot-status) не
+# работают, а ручной путь установки нечем выполнить.
+
+# --- EFI / NVRAM ----------------------------------------------------------------
+efibootmgr
+efivar
+gdisk
+parted
+dosfstools
+mtools
+
+# os-prober нужен grub-mkconfig, чтобы найти «Windows Boot Manager» в меню.
+# В Debian по умолчанию он выключен (GRUB_DISABLE_OS_PROBER=true) — включаем
+# своим drop-in etc/default/grub.d/byteguru-dualboot.cfg из overlay.
+os-prober
+
+# grub-efi-amd64 ставим ВНУТРЬ live-системы намеренно: документированный ручной
+# путь установки (/usr/share/doc/byteguruos/INSTALL.txt) требует grub-install
+# прямо из live-сессии. Риск: postinst grub-efi-amd64 в chroot может пытаться
+# настроить загрузчик — при DEBIAN_FRONTEND=noninteractive и неподмонтированном
+# /boot/efi он пропускает установку; при первом же прогоне CI это проверить.
+grub-efi-amd64
+grub-common
+grub2-common
+
+# --- файловые системы Windows / removable ---------------------------------------
+# ntfs3 собран в ядре/модулях (см. build/configs/kernel.defconfig), ntfs-3g —
+# запасной FUSE-путь и то, к чему привыкли утилиты. Подтверждено:
+# ntfs-3g 1:2022.10.3-5+deb13u3 есть в trixie.
+ntfs-3g
+exfatprogs
+f2fs-tools
+btrfs-progs
+e2fsprogs
+squashfs-tools
+
+# --- шифрование ------------------------------------------------------------------
+cryptsetup
+cryptsetup-initramfs
+
+# --- инструменты ручного пути установки -----------------------------------------
+debootstrap
+rsync
+pv
+pigz
+
+# --- чего здесь СОЗНАТЕЛЬНО нет ---------------------------------------------------
+# calamares (есть в trixie: 3.3.14-1, секция utils) — выбран документированный
+#   ручной путь, см. auto/config.
+# efitools / shim-unsigned / grub-efi-amd64-signed — Secure Boot отложен; имена
+#   пакетов для trixie не проверялись, выдумывать не будем (TODO: этап Secure Boot).
+# virtualbox-guest-* — отсутствуют в trixie, см. byteguru-firmware.list.chroot.
+# jfsutils / reiserfsprogs — нишевые ФС, не в первом образе.

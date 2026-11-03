@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "byteguru-os"
+version = "0.0.1"
+description = "ByteguruOS: пользовательские подсистемы открытой ОС (WinCompat, установщик, демон, оболочка)"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "Apache-2.0" }
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0"]
+gui = ["PyGObject>=3.46"]
+
+[project.scripts]
+wcmgr = "wcmgr.cli:main"
+bginstaller = "bginstaller.cli:main"
+bgd = "bgd.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src/wincompat", "src/installer", "src/bytegurud", "src/shell"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = [
+  "src/wincompat",
+  "src/installer",
+  "src/bytegurud",
+  "src/shell",
+]
+addopts = "-q --strict-markers"
+markers = [
+  "slow: тесты, которых нет на быстром пути CI",
+]

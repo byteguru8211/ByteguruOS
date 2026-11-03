@@ -1,0 +1,537 @@
+/*
+ * bgwl server lifecycle: CLI, backend auto-detection with a headless
+ * fallback, global registration, signal handling, shutdown.
+ *
+ * Structure follows wlroots' bundled tinywl example (examples/tinywl in
+ * 0.19.x) — same split of responsibilities, but with the compositor-specific
+ * state moved to the other translation units. See README.md.
+ */
+#include <signal.h>
+#include <stdbool.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include <wayland-server-core.h>
+#include <wlr/backend.h>
+#include <wlr/backend/drm.h>
+#include <wlr/backend/headless.h>
+#include <wlr/backend/multi.h>
+#include <wlr/render/allocator.h>
+#include <wlr/render/wlr_renderer.h>
+#include <wlr/types/wlr_compositor.h>
+#include <wlr/types/wlr_data_device.h>
+#include <wlr/types/wlr_subcompositor.h>
+#include <wlr/util/log.h>
+#include <wlr/version.h>
+
+#include "bgwl.h"
+#include "bgwl_config.h"
+
+/* The layer-shell global is bound at version 4: enough for the ByteguruOS
+ * panel (exclusive zones, anchors, keyboard interactivity). 0.19.3 allows up
+ * to ZWLR_LAYER_SHELL_V1_VERSION (5).
+ * ВЕРИФИЦИРОВАТЬ: wlr_layer_shell_v1_create() asserts version <= the protocol
+ * version in the vendored XML; check protocol/wlr-layer-shell-unstable-v1.xml
+ * if the build warns at runtime. */
+#define BGWL_LAYER_SHELL_VERSION 4
+/* xdg_wm_base version 3, matching tinywl: everything newer is optional for
+ * the clients bgwl is expected to run in v0. */
+#define BGWL_XDG_SHELL_VERSION 3
+
+static void usage(const char *argv0) {
+	printf("Usage: %s [options]\n"
+		"  -c, --command CMD     run CMD once the compositor is up\n"
+		"  -b, --backend NAME    auto (default) or headless\n"
+		"  -v, --version         print version and exit\n"
+		"  -h, --help            show this help and exit\n"
+		"\n"
+		"Environment: BGWL_TERMINAL, BGWL_BACKGROUND, BGWL_BACKGROUND_COLOR,\n"
+		"BGWL_XKB_LAYOUT (default ru,us), BGWL_HEADLESS_SIZE (default 1280x800).\n"
+		"See src/compositor/README.md for the full list.\n", argv0);
+}
+
+/* Hand-rolled parser: only exact long options and single-character short
+ * options, no getopt, no dependencies. */
+static bool parse_args(int argc, char **argv, struct bgwl_config *cfg) {
+	for (int i = 1; i < argc; i++) {
+		const char *arg = argv[i];
+
+		if (strcmp(arg, "-h") == 0 || strcmp(arg, "--help") == 0) {
+			usage(argv[0]);
+			exit(0);
+		} else if (strcmp(arg, "-v") == 0 || strcmp(arg, "--version") == 0) {
+			printf("bgwl %s (wlroots %s)\n", BGWL_VERSION, WLR_VERSION_STR);
+			exit(0);
+		} else if (strcmp(arg, "-c") == 0 || strcmp(arg, "--command") == 0) {
+			if (i + 1 >= argc) {
+				fprintf(stderr, "%s: %s requires an argument\n",
+					argv[0], arg);
+				return false;
+			}
+			free(cfg->startup_cmd);
+			cfg->startup_cmd = strdup(argv[++i]);
+			if (cfg->startup_cmd == NULL) {
+				return false;
+			}
+		} else if (strcmp(arg, "-b") == 0 || strcmp(arg, "--backend") == 0) {
+			if (i + 1 >= argc) {
+				fprintf(stderr, "%s: %s requires an argument\n",
+					argv[0], arg);
+				return false;
+			}
+			free(cfg->backend_hint);
+			cfg->backend_hint = strdup(argv[++i]);
+			if (cfg->backend_hint == NULL) {
+				return false;
+			}
+		} else if (arg[0] == '-' && arg[1] != '\0') {
+			fprintf(stderr, "%s: unknown option '%s'\n", argv[0], arg);
+			usage(argv[0]);
+			return false;
+		} else {
+			fprintf(stderr, "%s: unexpected positional argument '%s'\n",
+				argv[0], arg);
+			return false;
+		}
+	}
+
+	if (cfg->backend_hint != NULL &&
+			strcmp(cfg->backend_hint, "headless") != 0 &&
+			strcmp(cfg->backend_hint, "auto") != 0) {
+		fprintf(stderr, "%s: --backend must be 'auto' or 'headless'\n",
+			argv[0]);
+		return false;
+	}
+	return true;
+}
+
+/* --- backend selection -------------------------------------------------- */
+
+struct bgwl_drm_probe {
+	bool has_drm;
+};
+
+static void probe_backend(struct wlr_backend *backend, void *data) {
+	struct bgwl_drm_probe *probe = data;
+	if (wlr_backend_is_drm(backend)) {
+		probe->has_drm = true;
+	}
+}
+
+static bool has_drm_backend(struct wlr_backend *backend) {
+	if (wlr_backend_is_drm(backend)) {
+		return true;
+	}
+	if (!wlr_backend_is_multi(backend)) {
+		return false;
+	}
+	struct bgwl_drm_probe probe = { .has_drm = false };
+	wlr_multi_for_each_backend(backend, probe_backend, &probe);
+	return probe.has_drm;
+}
+
+/* Headless backend wrapped in a multi-backend, with one output so that a
+ * compositor run in CI or over SSH still has something to render to. */
+static struct wlr_backend *create_headless_fallback(struct bgwl_server *server,
+		struct wl_event_loop *loop) {
+	struct wlr_backend *multi = wlr_multi_backend_create(loop);
+	if (multi == NULL) {
+		wlr_log(WLR_ERROR, "wlr_multi_backend_create failed");
+		return NULL;
+	}
+
+	struct wlr_backend *headless = wlr_headless_backend_create(loop);
+	if (headless == NULL) {
+		wlr_log(WLR_ERROR, "wlr_headless_backend_create failed");
+		wlr_backend_destroy(multi);
+		return NULL;
+	}
+
+	if (!wlr_multi_backend_add(multi, headless)) {
+		wlr_log(WLR_ERROR, "failed to add headless backend to multi-backend");
+		wlr_backend_destroy(headless);
+		wlr_backend_destroy(multi);
+		return NULL;
+	}
+
+	if (wlr_headless_add_output(headless, (unsigned int)server->cfg.headless_width,
+			(unsigned int)server->cfg.headless_height) == NULL) {
+		wlr_log(WLR_ERROR, "wlr_headless_add_output failed");
+		wlr_backend_destroy(multi);
+		return NULL;
+	}
+
+	wlr_log(WLR_INFO, "headless fallback output %dx%d",
+		server->cfg.headless_width, server->cfg.headless_height);
+	return multi;
+}
+
+static struct wlr_backend *select_backend(struct bgwl_server *server,
+		struct wl_event_loop *loop) {
+	if (server->cfg.backend_hint != NULL &&
+			strcmp(server->cfg.backend_hint, "headless") == 0) {
+		wlr_log(WLR_INFO, "--backend headless requested");
+		return create_headless_fallback(server, loop);
+	}
+
+	/* Autocreate picks DRM+libinput on real hardware, and a nested Wayland or
+	 * X11 window when one is available. It returns NULL when nothing works —
+	 * that is the case we cover with the headless fallback. */
+	struct wlr_backend *backend = wlr_backend_autocreate(loop, NULL);
+	if (backend == NULL) {
+		wlr_log(WLR_INFO, "no hardware backend available, falling back to headless");
+		return create_headless_fallback(server, loop);
+	}
+
+	if (!has_drm_backend(backend)) {
+		wlr_log(WLR_INFO,
+			"no DRM device in the auto-created backend; adding a headless "
+			"output so the session is still usable");
+		struct wlr_backend *headless = wlr_headless_backend_create(loop);
+		if (headless != NULL) {
+			if (wlr_multi_backend_add(backend, headless)) {
+				if (wlr_headless_add_output(headless,
+						(unsigned int)server->cfg.headless_width,
+						(unsigned int)server->cfg.headless_height) == NULL) {
+					wlr_log(WLR_ERROR, "wlr_headless_add_output failed");
+				}
+			} else {
+				wlr_log(WLR_ERROR, "wlr_multi_backend_add failed");
+				wlr_backend_destroy(headless);
+			}
+		} else {
+			wlr_log(WLR_ERROR, "wlr_headless_backend_create failed");
+		}
+	}
+
+	return backend;
+}
+
+/* --- signals ------------------------------------------------------------ */
+
+static int handle_terminate(int signal_number, void *data) {
+	struct bgwl_server *server = data;
+	wlr_log(WLR_INFO, "received signal %d, shutting down", signal_number);
+	wl_display_terminate(server->wl_display);
+	return 0;
+}
+
+static bool add_signal_handler(struct bgwl_server *server, int signal_number,
+		struct wl_event_source **source_out) {
+	/* ВЕРИФИЦИРОВАТЬ: wl_event_loop_add_signal(loop, int,
+	 * wl_event_loop_signal_func_t, void *) from <wayland-server-core.h>. */
+	struct wl_event_source *source = wl_event_loop_add_signal(server->event_loop,
+		signal_number, handle_terminate, server);
+	if (source == NULL) {
+		wlr_log(WLR_ERROR, "failed to watch signal %d", signal_number);
+		return false;
+	}
+	*source_out = source;
+	return true;
+}
+
+/* --- assembly ----------------------------------------------------------- */
+
+static void create_scene_trees(struct bgwl_server *server) {
+	/* Creation order is stacking order, so build bottom-up. */
+	server->trees[BGWL_TREE_BG] = wlr_scene_tree_create(&server->scene->tree);
+	server->trees[BGWL_TREE_BACKGROUND] =
+		wlr_scene_tree_create(&server->scene->tree);
+	server->trees[BGWL_TREE_BOTTOM] =
+		wlr_scene_tree_create(&server->scene->tree);
+	server->trees[BGWL_TREE_NORMAL] =
+		wlr_scene_tree_create(&server->scene->tree);
+	server->trees[BGWL_TREE_TOP] = wlr_scene_tree_create(&server->scene->tree);
+	server->trees[BGWL_TREE_OVERLAY] =
+		wlr_scene_tree_create(&server->scene->tree);
+
+	for (int i = 0; i < BGWL_TREE_COUNT; i++) {
+		if (server->trees[i] == NULL) {
+			wlr_log(WLR_ERROR, "failed to create scene tree %d", i);
+			abort();
+		}
+	}
+}
+
+void bgwl_server_init(struct bgwl_server *server) {
+	memset(server, 0, sizeof(*server));
+	server->wl_display = wl_display_create();
+	if (server->wl_display == NULL) {
+		wlr_log(WLR_ERROR, "wl_display_create failed");
+		exit(1);
+	}
+	server->event_loop = wl_display_get_event_loop(server->wl_display);
+	server->cursor_mode = BGWL_CURSOR_PASSTHROUGH;
+	server->panel_visible = true;
+
+	wl_list_init(&server->toplevels);
+	wl_list_init(&server->outputs);
+	wl_list_init(&server->keyboards);
+}
+
+bool bgwl_server_start(struct bgwl_server *server) {
+	server->backend = select_backend(server, server->event_loop);
+	if (server->backend == NULL) {
+		wlr_log(WLR_ERROR, "failed to create a backend");
+		return false;
+	}
+
+	server->renderer = wlr_renderer_autocreate(server->backend);
+	if (server->renderer == NULL) {
+		wlr_log(WLR_ERROR, "failed to create wlr_renderer (set WLR_RENDERER?)");
+		return false;
+	}
+	/* This is what advertises wl_shm: wlr_renderer_init_wl_display() calls
+	 * wlr_shm_create_with_renderer() internally, so wl_shm must NOT be
+	 * created again by us or clients would see two globals. */
+	if (!wlr_renderer_init_wl_display(server->renderer, server->wl_display)) {
+		wlr_log(WLR_ERROR, "wlr_renderer_init_wl_display failed");
+		return false;
+	}
+
+	server->allocator = wlr_allocator_autocreate(server->backend,
+		server->renderer);
+	if (server->allocator == NULL) {
+		wlr_log(WLR_ERROR, "failed to create wlr_allocator");
+		return false;
+	}
+
+	wlr_compositor_create(server->wl_display, 5, server->renderer);
+	wlr_subcompositor_create(server->wl_display);
+	wlr_data_device_manager_create(server->wl_display);
+
+	server->output_layout = wlr_output_layout_create(server->wl_display);
+	if (server->output_layout == NULL) {
+		wlr_log(WLR_ERROR, "wlr_output_layout_create failed");
+		return false;
+	}
+
+	server->scene = wlr_scene_create();
+	if (server->scene == NULL) {
+		wlr_log(WLR_ERROR, "wlr_scene_create failed");
+		return false;
+	}
+	create_scene_trees(server);
+	server->scene_layout = wlr_scene_attach_output_layout(server->scene,
+		server->output_layout);
+	if (server->scene_layout == NULL) {
+		wlr_log(WLR_ERROR, "wlr_scene_attach_output_layout failed");
+		return false;
+	}
+
+	server->xdg_shell = wlr_xdg_shell_create(server->wl_display,
+		BGWL_XDG_SHELL_VERSION);
+	if (server->xdg_shell == NULL) {
+		wlr_log(WLR_ERROR, "wlr_xdg_shell_create failed");
+		return false;
+	}
+	server->new_xdg_toplevel.notify = bgwl_new_xdg_toplevel;
+	wl_signal_add(&server->xdg_shell->events.new_toplevel,
+		&server->new_xdg_toplevel);
+	server->new_xdg_popup.notify = bgwl_new_xdg_popup;
+	wl_signal_add(&server->xdg_shell->events.new_popup, &server->new_xdg_popup);
+
+	server->layer_shell = wlr_layer_shell_v1_create(server->wl_display,
+		BGWL_LAYER_SHELL_VERSION);
+	if (server->layer_shell == NULL) {
+		wlr_log(WLR_ERROR, "wlr_layer_shell_v1_create failed");
+		return false;
+	}
+	server->new_layer_surface.notify = bgwl_new_layer_surface;
+	wl_signal_add(&server->layer_shell->events.new_surface,
+		&server->new_layer_surface);
+
+	server->cursor = wlr_cursor_create();
+	if (server->cursor == NULL) {
+		wlr_log(WLR_ERROR, "wlr_cursor_create failed");
+		return false;
+	}
+	wlr_cursor_attach_output_layout(server->cursor, server->output_layout);
+
+	server->cursor_mgr = wlr_xcursor_manager_create(NULL, 24);
+	if (server->cursor_mgr == NULL) {
+		wlr_log(WLR_ERROR, "wlr_xcursor_manager_create failed "
+			"(is the 'default' xcursor theme installed?)");
+		return false;
+	}
+
+	server->cursor_motion.notify = bgwl_cursor_motion;
+	wl_signal_add(&server->cursor->events.motion, &server->cursor_motion);
+	server->cursor_motion_absolute.notify = bgwl_cursor_motion_absolute;
+	wl_signal_add(&server->cursor->events.motion_absolute,
+		&server->cursor_motion_absolute);
+	server->cursor_button.notify = bgwl_cursor_button;
+	wl_signal_add(&server->cursor->events.button, &server->cursor_button);
+	server->cursor_axis.notify = bgwl_cursor_axis;
+	wl_signal_add(&server->cursor->events.axis, &server->cursor_axis);
+	server->cursor_frame.notify = bgwl_cursor_frame;
+	wl_signal_add(&server->cursor->events.frame, &server->cursor_frame);
+
+	server->new_input.notify = bgwl_new_input;
+	wl_signal_add(&server->backend->events.new_input, &server->new_input);
+	server->new_output.notify = bgwl_new_output;
+	wl_signal_add(&server->backend->events.new_output, &server->new_output);
+
+	server->seat = wlr_seat_create(server->wl_display, "seat0");
+	if (server->seat == NULL) {
+		wlr_log(WLR_ERROR, "wlr_seat_create failed");
+		return false;
+	}
+	server->request_cursor.notify = bgwl_seat_request_cursor;
+	wl_signal_add(&server->seat->events.request_set_cursor,
+		&server->request_cursor);
+	server->request_set_selection.notify = bgwl_seat_request_set_selection;
+	wl_signal_add(&server->seat->events.request_set_selection,
+		&server->request_set_selection);
+
+	if (!add_signal_handler(server, SIGTERM, &server->sigterm_source) ||
+			!add_signal_handler(server, SIGINT, &server->sigint_source)) {
+		return false;
+	}
+	/* Spawned clients are fire-and-forget; ignoring SIGCHLD keeps the compositor
+	 * from accumulating zombies without a waitpid loop. */
+	signal(SIGCHLD, SIG_IGN);
+
+	const char *socket = wl_display_add_socket_auto(server->wl_display);
+	if (socket == NULL) {
+		wlr_log(WLR_ERROR, "wl_display_add_socket_auto failed");
+		return false;
+	}
+
+	if (!wlr_backend_start(server->backend)) {
+		wlr_log(WLR_ERROR, "wlr_backend_start failed");
+		return false;
+	}
+	server->started = true;
+
+	setenv("WAYLAND_DISPLAY", socket, true);
+	setenv("BGWL_SESSION_TYPE", "wayland", true);
+	setenv("XDG_SESSION_TYPE", "wayland", true);
+	setenv("XDG_CURRENT_DESKTOP", "ByteguruOS", true);
+
+	if (server->cfg.startup_cmd != NULL) {
+		bgwl_spawn(server, server->cfg.startup_cmd);
+	}
+
+	wlr_log(WLR_INFO, "bgwl %s running on WAYLAND_DISPLAY=%s", BGWL_VERSION,
+		socket);
+	return true;
+}
+
+void bgwl_server_terminate(struct bgwl_server *server) {
+	wl_display_terminate(server->wl_display);
+}
+
+struct bgwl_output *bgwl_server_first_output(struct bgwl_server *server) {
+	struct bgwl_output *output;
+	wl_list_for_each(output, &server->outputs, link) {
+		return output;
+	}
+	return NULL;
+}
+
+/* Warps the cursor to the centre of the layout once outputs exist; called
+ * from output.c on the first hotplug. */
+void bgwl_server_warp_cursor_to_center(struct bgwl_server *server) {
+	struct wlr_box box;
+	wlr_output_layout_get_box(server->output_layout, NULL, &box);
+	if (box.width <= 0 || box.height <= 0) {
+		return;
+	}
+	if (!wlr_cursor_warp(server->cursor, NULL, box.x + box.width / 2.0,
+			box.y + box.height / 2.0)) {
+		wlr_log(WLR_DEBUG, "cursor warp to layout centre failed");
+	}
+}
+
+void bgwl_server_finish(struct bgwl_server *server) {
+	if (server->wl_display == NULL) {
+		return;
+	}
+
+	wl_display_destroy_clients(server->wl_display);
+
+	if (server->sigterm_source != NULL) {
+		wl_event_source_remove(server->sigterm_source);
+		server->sigterm_source = NULL;
+	}
+	if (server->sigint_source != NULL) {
+		wl_event_source_remove(server->sigint_source);
+		server->sigint_source = NULL;
+	}
+
+	wl_list_remove(&server->new_xdg_toplevel.link);
+	wl_list_remove(&server->new_xdg_popup.link);
+	wl_list_remove(&server->new_layer_surface.link);
+	wl_list_remove(&server->cursor_motion.link);
+	wl_list_remove(&server->cursor_motion_absolute.link);
+	wl_list_remove(&server->cursor_button.link);
+	wl_list_remove(&server->cursor_axis.link);
+	wl_list_remove(&server->cursor_frame.link);
+	wl_list_remove(&server->new_input.link);
+	wl_list_remove(&server->new_output.link);
+	wl_list_remove(&server->request_cursor.link);
+	wl_list_remove(&server->request_set_selection.link);
+
+	/* Backend first: destroying it fires the output and input destroy events
+	 * our handlers use to drop scene nodes and free per-device state, and at
+	 * that point the scene graph is still alive. */
+	if (server->backend != NULL) {
+		wlr_backend_destroy(server->backend);
+		server->backend = NULL;
+	}
+
+	if (server->scene != NULL) {
+		wlr_scene_node_destroy(&server->scene->tree.node);
+		server->scene = NULL;
+	}
+	if (server->cursor_mgr != NULL) {
+		wlr_xcursor_manager_destroy(server->cursor_mgr);
+		server->cursor_mgr = NULL;
+	}
+	if (server->cursor != NULL) {
+		wlr_cursor_destroy(server->cursor);
+		server->cursor = NULL;
+	}
+	if (server->allocator != NULL) {
+		wlr_allocator_destroy(server->allocator);
+		server->allocator = NULL;
+	}
+	if (server->renderer != NULL) {
+		wlr_renderer_destroy(server->renderer);
+		server->renderer = NULL;
+	}
+	if (server->output_layout != NULL) {
+		wlr_output_layout_destroy(server->output_layout);
+		server->output_layout = NULL;
+	}
+
+	wl_display_destroy(server->wl_display);
+	server->wl_display = NULL;
+
+	bgwl_config_finish(&server->cfg);
+}
+
+int main(int argc, char **argv) {
+	wlr_log_init(WLR_DEBUG, NULL);
+
+	struct bgwl_server server = {0};
+	bgwl_server_init(&server);
+	bgwl_config_load(&server.cfg);
+
+	if (!parse_args(argc, argv, &server.cfg)) {
+		bgwl_config_finish(&server.cfg);
+		wl_display_destroy(server.wl_display);
+		return EXIT_FAILURE;
+	}
+
+	if (!bgwl_server_start(&server)) {
+		bgwl_server_finish(&server);
+		return EXIT_FAILURE;
+	}
+
+	wl_display_run(server.wl_display);
+	bgwl_server_finish(&server);
+	return EXIT_SUCCESS;
+}

@@ -1,0 +1,14 @@
+# Каталог для НАШИХ .deb-пакетов (не путать с config/package-lists/).
+#
+# live-build 3.x устанавливает всё, что лежит в config/packages.chroot/ с
+# расширением .deb/.udeb, через dpkg, ДО обработки списков пакетов. Это штатное
+# место для byteguru-* пакетов, когда они появятся:
+#   byteguru-repo-keyring_1.0_all.deb     (ключ нашего apt-репозитория)
+#   byteguru-desktop-branding_*.deb       (обои, логотип, etc/xdg)
+#   byteguru-winecompat-*.deb             (слой WinCompat — позже)
+#   byteguru-kernel-6.x-amd64_*.deb       (из build/configs/kernel.defconfig)
+#
+# Файл скрыт (.gitkeep), чтобы live-build его не увидел: обход каталога
+# идёт по глобу *, а dpkg-установка произвольного текста уронила бы сборку.
+# Сюда НЕ кладут бинарные .deb из git — артефакты сборки ядра/пакетов должны
+# приходить в CI (job build-package), иначе репозиторий разрастётся.

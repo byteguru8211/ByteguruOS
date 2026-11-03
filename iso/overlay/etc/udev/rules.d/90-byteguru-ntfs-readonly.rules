@@ -1,0 +1,42 @@
+# 90-byteguru-ntfs-readonly.rules — NTFS только для чтения по умолчанию.
+#
+# Механизм (проверен по справочнику UDisks2 «Configurable mount options»):
+# udisks2 читает udev-свойства устройства с префиксом UDISKS_MOUNT_OPTIONS_ и
+# они имеют приоритет над /etc/udisks2/mount_options.conf. Ключи:
+#   UDISKS_MOUNT_OPTIONS_DEFAULTS / _ALLOW               (общие)
+#   UDISKS_MOUNT_OPTIONS_<FS>_DEFAULTS / _<FS>_ALLOW     (по ФС)
+# Правило ниже помечает все NTFS-разделы как «только чтение» и, что важно,
+# разрешает rw, чтобы явный запрос пользователя не был отклонён как недопустимая
+# опция (ограничение "_defaults обязан быть подмножеством _allow").
+#
+# Numeral-префикс 90 выбран, чтобы перекрывать правила, которые могут
+# навесить на тот же ID_FS_TYPE сторонние пакеты (правила читаются по алфавиту,
+# позднее значение перезаписывает раннее).
+#
+# ТРЕБОВАНИЕ К СРЕДЕ: правило действует только там, где монтирование идёт через
+# udisks2 (GVFS/Thunar/Disks, `udisksctl`). Прямое `mount(8)` udev не касается —
+# для него политика описана в mount_options.conf и в документации образа.
+# Ядерный драйвер ntfs3 также подчиняется этим свойствам, т.к. udisks2 сам
+# выбирает драйвер (см. ntfs_drivers в mount_options.conf).
+
+# --- все NTFS-разделы: read-only по умолчанию -----------------------------------
+ACTION=="add|change", ENV{ID_FS_TYPE}=="ntfs|ntfs3", \
+	ENV{UDISKS_MOUNT_OPTIONS_NTFS_DEFAULTS}="ro,nodev,nosuid", \
+	ENV{UDISKS_MOUNT_OPTIONS_NTFS_ALLOW}="ro,rw,nodev,nosuid,uid,gid,umask,dmask,fmask,locale,norecover,ignore_case,windows_names,iocharset", \
+	ENV{UDISKS_MOUNT_OPTIONS_NTFS3_DEFAULTS}="ro,nodev,nosuid", \
+	ENV{UDISKS_MOUNT_OPTIONS_NTFS3_ALLOW}="ro,rw,nodev,nosuid,uid,gid,umask,dmask,fmask,iocharset,discard,nodiscard,sparse,nosparse,hidden,nohidden,sys_immutable,nosys_immutable,showmeta,noshowmeta,prealloc,noprealloc"
+
+# --- ДОКУМЕНТИРОВАННЫЙ ПЕРЕОПРЕДЕЛЯЮЩИЙ OVERRIDE (раскомментировать по месту) ----
+# Разрешить запись для одного конкретного тома (UUID из `blkid -s UUID`), не
+# ослабляя политику для остальных. Срабатывает позже правила выше, потому что
+# имя файла алфавитно дальше (99 > 90).
+#
+# ACTION=="add|change", ENV{ID_FS_UUID}=="1234567890abcdef", ENV{ID_FS_TYPE}=="ntfs|ntfs3", \
+#	ENV{UDISKS_MOUNT_OPTIONS_NTFS_DEFAULTS}="rw,nodev,nosuid", \
+#	ENV{UDISKS_MOUNT_OPTIONS_NTFS3_DEFAULTS}="rw,nodev,nosuid"
+#
+# После правки: sudo udevadm control --reload && sudo udevadm trigger --subsystem-match=block
+# и ПЕРЕПОДКЛЮЧИТЬ том (том уже смонтированный не переключится).
+#
+# Быстрая проверка, что правило вообще применилось:
+#   udevadm info -q property /dev/sdXn | grep UDISKS_MOUNT_OPTIONS

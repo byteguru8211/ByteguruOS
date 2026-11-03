@@ -1,0 +1,34 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/.venv/
+.venv/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Локальные артефакты сборки образа и rootfs — никогда не попадают в git
+output/
+iso-build/
+chroot/
+*.iso
+*.iso.sha256
+*.pkg.tar.zst
+*.deb
+*.rpm
+
+# Рабочие данные подсистем при локальных прогонах
+.var/
+var/
+*.wcv.cache/
+
+# Редакторы и ОС
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
+desktop.ini

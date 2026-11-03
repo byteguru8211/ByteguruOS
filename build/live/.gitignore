@@ -1,0 +1,22 @@
+# Артефакты live-build. Каталог build/live — это КОНФИГ, а не место для сборки:
+# lb строит внутри своего дерева и оставляет кучу промежуточных стадий.
+#
+# includes.chroot — производный каталог: build/scripts/build-iso.sh копирует в
+# него iso/overlay/ (единственный источник файлов образа). Держать его в git
+# означало бы две копии одного и того же дерева и конфликты на Windows.
+config/includes.chroot/
+
+# кэш стадий live-build (включается --cache true; по умолчанию выключен)
+cache/
+
+# промежуточные стадии и готовый ISO
+binary/
+binary_*
+chroot/
+archive/
+*.iso
+*.hybrid.iso
+*.tar
+*.pack
+*.zsync
+live-image*
