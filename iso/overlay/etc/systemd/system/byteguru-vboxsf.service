@@ -1,0 +1,28 @@
+[Unit]
+# ByteguruOS: автомонтирование shared folder VirtualBox при загрузке.
+Description=ByteguruOS — примонтировать общие папки VirtualBox (vboxsf)
+Documentation=https://github.com/byteguru8211/ByteguruOS
+# Монтируем только в гостевой ВМ Oracle VirtualBox. Без этого условия юнит
+# пытался бы работать на физическом железе (модуль vboxguest там отсутствует)
+# и шумел бы в журнале.
+ConditionVirtualization=oracle
+# Модули ядра (vboxguest/vboxsf) загружает systemd-modules-load / udev по мере
+# надобности; скрипт сам делает modprobe, поэтому ждём только общей очереди.
+After=systemd-modules-load.service
+# Local filesystems target полезен, чтобы точка /mnt/vbox уже существовала.
+After=local-fs.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# Скрипт идемпотентен: уже смонтированные шары он пропускает, поэтому повторный
+# запуск (и перезагрузка) безопасны.
+ExecStart=/usr/local/bin/byteguru-vboxsf-mount --all
+# Отмонтирование — ответственность пользователя/udev: у vboxsf-томов часто
+# висят рабочие каталоги, и тишина при stop предпочтительнее FORCE-kill.
+TimeoutStartSec=30
+Nice=10
+IOSchedulingClass=idle
+
+[Install]
+WantedBy=multi-user.target

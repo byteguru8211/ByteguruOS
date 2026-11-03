@@ -1,0 +1,280 @@
+#!/usr/bin/env bash
+#
+# byteguru-boot-status — диагностика EFI-загрузки ByteguruOS (только чтение).
+#
+# Назначение: за секунды ответить на три вопроса, которые задаёт человек после
+# «Windows обновилась и система перестала грузиться»:
+#   1. Мы в UEFI или в CSM/Legacy?
+#   2. Что прошивка считает правильным порядком (BootCurrent/BootOrder) и есть
+#      ли в нём запись ByteguruOS?
+#   3. Целы ли файлы загрузчика на ESP (в т.ч. запись Windows Boot Manager)?
+#
+# НИЧЕГО НЕ МЕНЯЕТ: ни NVRAM, ни разделы, ни файлы. Монтирование ESP — только
+# для чтения и только если он не смонтирован; размонтирование в trap.
+# Выход: 0 = всё в порядке, 1 = есть проблемы (удобно для скриптов/отчётов).
+set -euo pipefail
+
+PROGRAM_NAME="$(basename "$0")"
+REPAIR_TOOL="byteguru-boot-repair"
+LABEL_DEFAULT="ByteguruOS"
+
+LABEL="${LABEL_DEFAULT}"
+ESP_OVERRIDE=""
+VERBOSE=0
+problems=0
+
+usage() {
+	cat <<EOF
+Использование: ${PROGRAM_NAME} [опции]
+
+Диагностика EFI-загрузки без каких-либо изменений.
+
+Опции:
+  -h, --help         эта справка
+  -v, --verbose      показывать полный вывод efibootmgr -v и дерево ESP
+      --label ИМЯ    ожидаемая метка записи (по умолчанию "${LABEL_DEFAULT}")
+      --esp УСТРОЙСТВО  устройство ESP (по умолчанию ищем сама)
+
+Совет: для восстановления используйте sudo ${REPAIR_TOOL} --dry-run.
+EOF
+}
+
+say() { printf '%s\n' "$*"; }
+hdr() { printf '\n=== %s ===\n' "$*"; }
+note_problem() { printf 'ПРОБЛЕМА: %s\n' "$*" >&2; problems=$((problems + 1)); }
+
+# Вспомогательная печать «есть/нет» — стабильный формат, чтобы на него мог
+# опереться человек, снимающий скриншот для баг-репорта.
+yn() {
+	if [ "$1" = "0" ]; then
+		printf 'да\n'
+	else
+		printf 'НЕТ\n'
+	fi
+}
+
+while [ "$#" -gt 0 ]; do
+	case "$1" in
+	-h | --help)
+		usage
+		exit 0
+		;;
+	-v | --verbose) VERBOSE=1 ;;
+	--label)
+		[ "$#" -ge 2 ] || { echo "${PROGRAM_NAME}: --label требует значение" >&2; exit 2; }
+		LABEL="$2"
+		shift
+		;;
+	--esp)
+		[ "$#" -ge 2 ] || { echo "${PROGRAM_NAME}: --esp требует значение" >&2; exit 2; }
+		ESP_OVERRIDE="$2"
+		shift
+		;;
+	-*)
+		echo "${PROGRAM_NAME}: неизвестная опция: $1" >&2
+		exit 2
+		;;
+	esac
+	shift
+done
+
+say "Отчёт о загрузке ByteguruOS — ${PROGRAM_NAME}"
+say "хост: $(uname -n)   ядро: $(uname -r)   время: $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+
+# --- 1. режим прошивки ----------------------------------------------------------
+hdr "1. Режим прошивки"
+if [ -d /sys/firmware/efi ]; then
+	say "загрузка: UEFI"
+else
+	say "загрузка: BIOS/CSM (Legacy)"
+	note_problem "мы не в UEFI — EFI-записи NVRAM недоступны; ${REPAIR_TOOL} в этом режиме работать не будет"
+fi
+
+if command -v efibootmgr >/dev/null 2>&1; then
+	say "efibootmgr: установлен ($(command -v efibootmgr))"
+else
+	say "efibootmgr: ОТСУТСТВУЕТ"
+	note_problem "efibootmgr не установлен — NVRAM не прочитать (apt install efibootmgr)"
+fi
+
+[ "$(id -u)" -eq 0 ] || say "права: обычный пользователь — часть проверок будет пропущена (для полного отчёта: sudo ${PROGRAM_NAME})"
+
+# --- 2. NVRAM: BootCurrent / BootOrder / записи ---------------------------------
+hdr "2. NVRAM (порядок и записи загрузки)"
+BOOT_PLAIN=""
+BOOT_VERBOSE=""
+if command -v efibootmgr >/dev/null 2>&1 && [ -d /sys/firmware/efi/efivars ]; then
+	BOOT_PLAIN="$(efibootmgr 2>/dev/null || true)"
+	BOOT_VERBOSE="$(efibootmgr -v 2>/dev/null || true)"
+fi
+
+if [ -z "${BOOT_PLAIN}" ]; then
+	say "данные efibootmgr недоступны"
+else
+	printf '%s\n' "${BOOT_PLAIN}" | sed -n 's/^BootCurrent: /BootCurrent (чем загрузились сейчас): /p'
+	printf '%s\n' "${BOOT_PLAIN}" | sed -n 's/^BootOrder: /BootOrder (порядок прошивки):  /p'
+	printf '%s\n' "${BOOT_PLAIN}" | sed -n 's/^BootNext: /BootNext (одноразовый):       /p'
+	printf '%s\n' "${BOOT_PLAIN}" | sed -n 's/^Timeout: /Таймаут меню:                 /p'
+
+	hdr "  записи Boot####"
+	printf '%s\n' "${BOOT_PLAIN}" | grep -E '^Boot[0-9A-Fa-f]{4}' || say "(нет ни одной записи Boot####)"
+
+	# Есть ли наша запись и стоит ли она в BootOrder?
+	OUR_NUM=""
+	while IFS= read -r line; do
+		case "${line}" in
+		Boot[0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f]*) ;;
+		*) continue ;;
+		esac
+		num="$(printf '%s' "${line}" | cut -c5-8)"
+		lbl="$(printf '%s' "${line}" | cut -c9- | sed -e 's/^[*+[:space:]]*//' -e 's/[[:space:]]*$//')"
+		[ "${lbl}" = "${LABEL}" ] || continue
+		OUR_NUM="${num}"
+		break
+	done <<<"${BOOT_PLAIN}"
+
+	if [ -n "${OUR_NUM}" ]; then
+		say ""
+		say "запись «${LABEL}»: есть, Boot${OUR_NUM}"
+		ORDER="$(printf '%s\n' "${BOOT_PLAIN}" | sed -n 's/^BootOrder: //p' | head -n1)"
+		if [ -n "${ORDER}" ]; then
+			if printf '%s\n' "${ORDER}" | tr ',' '\n' | grep -qix "${OUR_NUM}"; then
+				POS="$(printf '%s\n' "${ORDER}" | tr ',' '\n' | grep -nxi "${OUR_NUM}" | cut -d: -f1 | head -n1)"
+				say "в BootOrder: позиция ${POS} (1 = грузится первой)"
+				[ "${POS}" = "1" ] || say "подсказка: ${REPAIR_TOOL} поставит её первой (это поведение по умолчанию)"
+			else
+				note_problem "запись Boot${OUR_NUM} существует, но её НЕТ в BootOrder — прошивка её не рассмотрит"
+			fi
+		fi
+	else
+		note_problem "записи «${LABEL}» нет в NVRAM — типичный случай после обновления Windows; восстановление: sudo ${REPAIR_TOOL} --dry-run"
+	fi
+
+	# Windows-запись: мы её не трогаем, но пользователю полезно знать, цела ли она.
+	WIN_LINE="$(printf '%s\n' "${BOOT_VERBOSE}" | grep -iE 'Windows Boot Manager|bootmgfw\.efi' | head -n1 || true)"
+	if [ -n "${WIN_LINE}" ]; then
+		say "Windows Boot Manager: запись найдена (мы её не изменяем)"
+	else
+		say "Windows Boot Manager: запись не найдена (Windows может отсутствовать на этом диске или быть в CSM)"
+	fi
+
+	if [ "${VERBOSE}" -eq 1 ]; then
+		hdr "  efibootmgr -v (полностью)"
+		printf '%s\n' "${BOOT_VERBOSE}"
+	fi
+fi
+
+# --- 3. Secure Boot -------------------------------------------------------------
+hdr "3. Secure Boot"
+SB=""
+if command -v mokutil >/dev/null 2>&1; then
+	SB="$(mokutil --sb-state 2>/dev/null || true)"
+fi
+if [ -z "${SB}" ]; then
+	SBVAR="$(find /sys/firmware/efi/efivars -maxdepth 1 -name 'SecureBoot-*' 2>/dev/null | head -n1 || true)"
+	if [ -n "${SBVAR}" ] && [ -r "${SBVAR}" ]; then
+		# efivarfs: 4 байта атрибутов, затем 1 байт значения.
+		SBVAL="$(od -An -tu1 -j4 -N1 "${SBVAR}" 2>/dev/null | tr -d '[:space:]' || true)"
+		case "${SBVAL}" in
+		0) SB="disabled" ;;
+		1) SB="enabled" ;;
+		esac
+	fi
+fi
+if [ -n "${SB}" ]; then
+	say "Secure Boot: ${SB}"
+	case "${SB}" in
+	*enabled*)
+		say "внимание: при включённом Secure Boot нужен подписанный загрузчик (shim);"
+		say "в первом образе подписи НЕТ — ожидается, что Secure Boot выключен в прошивке"
+		;;
+	esac
+else
+	say "Secure Boot: определить не удалось (нет mokutil и/или читается не SecureBoot-переменная)"
+fi
+
+# --- 4. ESP и файлы загрузчика ---------------------------------------------------
+hdr "4. ESP (EFI System Partition) и файлы"
+ESP_DEV=""
+ESP_TARGET=""
+if [ -n "${ESP_OVERRIDE}" ]; then
+	ESP_DEV="${ESP_OVERRIDE}"
+else
+	for mp in /boot/efi /efi /boot; do
+		[ -d "${mp}" ] || continue
+		src="$(findmnt -n -o SOURCE --target "${mp}" 2>/dev/null || true)"
+		case "${src}" in
+		/dev/*)
+			ESP_DEV="${src}"
+			ESP_TARGET="${mp}"
+			break
+			;;
+		esac
+	done
+fi
+if [ -z "${ESP_DEV}" ]; then
+	# Не смонтирован — просто покажем кандидатов, ничего не монтируя без нужды.
+	say "ESP не смонтирован; кандидаты (vfat-разделы):"
+	lsblk -nro NAME,FSTYPE,SIZE,PARTTYPENAME -p -e 7 2>/dev/null | awk '$2=="vfat" { printf "  %s (%s, %s, %s)\n", $1, $2, $3, substr($0, index($0,$4)) }' || say "  (lsblk недоступен)"
+	say "для просмотра содержимого: sudo ${PROGRAM_NAME} --esp /dev/nvme0n1p1"
+else
+	say "устройство ESP: ${ESP_DEV}"
+	[ -n "${ESP_TARGET}" ] && say "точка монтирования: ${ESP_TARGET}"
+
+	MOUNT_POINT="${ESP_TARGET}"
+	TMP_MOUNT=""
+	# Размонтируем временную точку при любом выходе. Переменная ловушки
+	# читается в момент срабатывания, поэтому trap ставится один раз и не
+	# требует ручного цитирования пути.
+	cleanup_tmp_mount() {
+		if [ -n "${TMP_MOUNT}" ] && [ -d "${TMP_MOUNT}" ]; then
+			umount "${TMP_MOUNT}" 2>/dev/null || true
+			rmdir "${TMP_MOUNT}" 2>/dev/null || true
+		fi
+	}
+	trap cleanup_tmp_mount EXIT
+	if [ -z "${MOUNT_POINT}" ]; then
+		if [ "$(id -u)" -ne 0 ]; then
+			say "обычный пользователь: содержимое ESP не показываю (нужен root для монтирования)"
+		else
+			TMP_MOUNT="$(mktemp -d /run/byteguru-esp-view.XXXXXX)"
+			if mount -o ro,uid=0,fmask=0077,dmask=0077 "${ESP_DEV}" "${TMP_MOUNT}" 2>/dev/null; then
+				MOUNT_POINT="${TMP_MOUNT}"
+			else
+				note_problem "не удалось смонтировать ${ESP_DEV} только для чтения"
+			fi
+		fi
+	fi
+	[ -n "${TMP_MOUNT}" ] && trap 'umount "'"${TMP_MOUNT}"'" 2>/dev/null || true; rmdir "'"${TMP_MOUNT}"'" 2>/dev/null || true' EXIT
+
+	if [ -n "${MOUNT_POINT}" ]; then
+		say "содержимое ${MOUNT_POINT}/EFI:"
+		if [ -d "${MOUNT_POINT}/EFI" ]; then
+			find "${MOUNT_POINT}/EFI" -maxdepth 2 -type f -name '*.efi' -printf '  %p\n' 2>/dev/null | sort ||
+				find "${MOUNT_POINT}/EFI" -maxdepth 2 -type f 2>/dev/null | sed 's/^/  /'
+			for cand in byteguru grub debian boot systemd Microsoft; do
+				if [ -d "${MOUNT_POINT}/EFI/${cand}" ]; then
+					say "  каталог EFI/${cand}: есть"
+				fi
+			done
+		else
+			note_problem "на ${ESP_DEV} нет каталога EFI/ — это не ESP или он отформатирован заново"
+		fi
+
+		if [ "${VERBOSE}" -eq 1 ]; then
+			hdr "  дерево ESP полностью (verbose)"
+			find "${MOUNT_POINT}" -maxdepth 3 2>/dev/null | sed 's/^/  /' | head -n 100 || true
+		fi
+	fi
+fi
+
+# --- 5. итоги --------------------------------------------------------------------
+hdr "ИТОГ"
+if [ "${problems}" -eq 0 ]; then
+	say "проблем не обнаружено."
+else
+	say "обнаружено проблем: ${problems}"
+	say "следующий шаг: sudo ${REPAIR_TOOL} --dry-run (он ничего не меняет, только показывает)"
+fi
+
+exit "$((problems > 0 ? 1 : 0))"

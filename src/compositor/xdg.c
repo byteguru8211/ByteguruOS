@@ -43,31 +43,14 @@ static void popup_handle_destroy(struct wl_listener *listener, void *data) {
 	free(popup);
 }
 
-void bgwl_new_xdg_popup(struct wl_listener *listener, void *data) {
-	struct wlr_xdg_popup *xdg_popup = data;
-
+struct bgwl_popup *bgwl_popup_create(struct wlr_xdg_popup *xdg_popup,
+		struct wlr_scene_tree *parent_tree) {
 	struct bgwl_popup *popup = calloc(1, sizeof(*popup));
 	if (popup == NULL) {
 		wlr_log(WLR_ERROR, "out of memory for xdg popup");
-		return;
+		return NULL;
 	}
 	popup->xdg_popup = xdg_popup;
-
-	struct wlr_xdg_surface *parent =
-		wlr_xdg_surface_try_from_wlr_surface(xdg_popup->parent);
-	if (parent == NULL) {
-		/* Not a role we handed out a scene node for; drop the popup rather
-		 * than assert on client behaviour. */
-		wlr_log(WLR_ERROR, "xdg popup with non-xdg parent");
-		free(popup);
-		return;
-	}
-	struct wlr_scene_tree *parent_tree = parent->data;
-	if (parent_tree == NULL) {
-		wlr_log(WLR_ERROR, "xdg popup parent has no scene node");
-		free(popup);
-		return;
-	}
 
 	xdg_popup->base->data = wlr_scene_xdg_surface_create(parent_tree,
 		xdg_popup->base);
@@ -76,4 +59,28 @@ void bgwl_new_xdg_popup(struct wl_listener *listener, void *data) {
 	wl_signal_add(&xdg_popup->base->surface->events.commit, &popup->commit);
 	popup->destroy.notify = popup_handle_destroy;
 	wl_signal_add(&xdg_popup->events.destroy, &popup->destroy);
+	return popup;
+}
+
+void bgwl_new_xdg_popup(struct wl_listener *listener, void *data) {
+	struct wlr_xdg_popup *xdg_popup = data;
+
+	struct wlr_xdg_surface *parent = NULL;
+	if (xdg_popup->parent != NULL) {
+		/* ВЕРИФИЦИРОВАТЬ: every *_try_from_wlr_surface() helper in 0.19.3
+		 * dereferences its argument, so NULL parents must be filtered here.
+		 * Popups whose parent is a layer surface are handled by layer.c via
+		 * wlr_layer_surface_v1.events.new_popup instead. */
+		parent = wlr_xdg_surface_try_from_wlr_surface(xdg_popup->parent);
+	}
+	if (parent == NULL) {
+		return;
+	}
+	struct wlr_scene_tree *parent_tree = parent->data;
+	if (parent_tree == NULL) {
+		wlr_log(WLR_ERROR, "xdg popup parent has no scene node");
+		return;
+	}
+
+	bgwl_popup_create(xdg_popup, parent_tree);
 }

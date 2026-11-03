@@ -33,22 +33,6 @@ const char *bgwl_env_string(const char *name, const char *fallback) {
 	return value;
 }
 
-int bgwl_env_int(const char *name, int fallback) {
-	const char *value = getenv(name);
-	if (value == NULL || value[0] == '\0') {
-		return fallback;
-	}
-	char *end = NULL;
-	errno = 0;
-	long parsed = strtol(value, &end, 10);
-	if (errno != 0 || end == value || *end != '\0' || parsed <= 0 ||
-			parsed > INT16_MAX) {
-		wlr_log(WLR_ERROR, "%s: ignoring invalid integer '%s'", name, value);
-		return fallback;
-	}
-	return (int)parsed;
-}
-
 /* "#RRGGBB" or "#RRGGBBAA" into premultiplied RGBA floats. */
 static bool parse_hex_color(const char *text, float out[static 4]) {
 	if (text[0] != '#') {
@@ -244,6 +228,12 @@ static bool bgwl_cairo_buffer_begin_data_ptr_access(struct wlr_buffer *wlr_buffe
 static void bgwl_cairo_buffer_end_data_ptr_access(struct wlr_buffer *wlr_buffer) {
 }
 
+/* ВЕРИФИЦИРОВАТЬ: struct wlr_buffer_impl field names (destroy,
+ * begin_data_ptr_access, end_data_ptr_access), wlr_buffer_init() and
+ * wlr_buffer_drop() come from <wlr/interfaces/wlr_buffer.h> and
+ * <wlr/types/wlr_buffer.h>; this custom-buffer route is the only supported
+ * way to feed cairo pixels to the scene in 0.19.3 (no wlr_buffer_data, no
+ * wlr_scene_text). */
 static const struct wlr_buffer_impl bgwl_cairo_buffer_impl = {
 	.destroy = bgwl_cairo_buffer_destroy,
 	.begin_data_ptr_access = bgwl_cairo_buffer_begin_data_ptr_access,

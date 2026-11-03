@@ -12,7 +12,6 @@
 #include <linux/input-event-codes.h>
 #include <stdbool.h>
 #include <stdlib.h>
-#include <string.h>
 
 #include <wayland-server-core.h>
 #include <wlr/interfaces/wlr_keyboard.h>
@@ -77,9 +76,13 @@ void bgwl_keyboard_switch_layout(struct bgwl_keyboard *keyboard) {
 	xkb_layout_index_t current = wlr_keyboard->modifiers.group;
 	xkb_layout_index_t next = (current + 1) % count;
 
-	/* wlr_keyboard_notify_modifiers() re-applies the mask to the keyboard's
-	 * xkb_state and emits the modifiers event, which our modifiers listener
-	 * forwards to the focused client. */
+	/* ВЕРИФИЦИРОВАТЬ: wlr_keyboard_notify_modifiers() lives in the unstable
+	 * <wlr/interfaces/wlr_keyboard.h> header (kernels: mods_depressed,
+	 * mods_latched, mods_locked, group). If a wlroots bump hides it, the
+	 * fallback is xkb_state_update_mask() on wlr_keyboard->xkb_state followed
+	 * by emitting the modifiers signal ourselves. */
+	/* The call re-applies the mask to the keyboard's xkb_state and emits the
+	 * modifiers event, which our modifiers listener forwards to the client. */
 	wlr_keyboard_notify_modifiers(wlr_keyboard,
 		wlr_keyboard->modifiers.depressed, wlr_keyboard->modifiers.latched,
 		wlr_keyboard->modifiers.locked, next);
@@ -87,42 +90,6 @@ void bgwl_keyboard_switch_layout(struct bgwl_keyboard *keyboard) {
 	const char *name = xkb_keymap_layout_get_name(keymap, next);
 	wlr_log(WLR_INFO, "keyboard layout switched to %s (index %d/%d)",
 		name ? name : "?", (int)next, (int)count);
-}
-
-static bool handle_keybinding(struct bgwl_server *server,
-		struct bgwl_keyboard *keyboard, uint32_t modifiers, uint32_t keycode,
-		bool pressed) {
-	if (!pressed) {
-		return false;
-	}
-
-	if (binding_pressed(modifiers, keycode, 0)) {
-		switch (keycode) {
-		case KEY_ENTER:
-		case KEY_KPENTER:
-			if (!bgwl_spawn(server, server->cfg.terminal)) {
-				wlr_log(WLR_ERROR, "failed to launch terminal '%s'",
-					server->cfg.terminal);
-			}
-			return true;
-		case KEY_D:
-			bgwl_panel_toggle(server);
-			return true;
-		case KEY_SPACE:
-			bgwl_keyboard_switch_layout(keyboard);
-			return true;
-		default:
-			break;
-		}
-	}
-
-	if (binding_pressed(modifiers, keycode, WLR_MODIFIER_SHIFT) &&
-			keycode == KEY_Q) {
-		bgwl_server_terminate(server);
-		return true;
-	}
-
-	return false;
 }
 
 static void keyboard_handle_modifiers(struct wl_listener *listener, void *data) {
@@ -141,14 +108,41 @@ static void keyboard_handle_key(struct wl_listener *listener, void *data) {
 	struct wlr_seat *seat = server->seat;
 
 	uint32_t modifiers = wlr_keyboard_get_modifiers(keyboard->wlr_keyboard);
-	bool handled = handle_keybinding(server, keyboard, modifiers,
-		event->keycode, event->state == WL_KEYBOARD_KEY_STATE_PRESSED);
+	enum bgwl_binding binding = match_binding(modifiers, event->keycode);
+	bool pressed = event->state == WL_KEYBOARD_KEY_STATE_PRESSED;
 
-	if (!handled) {
-		wlr_seat_set_keyboard(seat, keyboard->wlr_keyboard);
-		wlr_seat_keyboard_notify_key(seat, event->time_msec, event->keycode,
-			event->state);
+	if (binding != BGWL_BIND_NONE) {
+		/* Consume both press and release so clients never see half a
+		 * shortcut. A release that arrives after Shift was let go no longer
+		 * matches Super+Shift+<key> and is forwarded — harmless, and the
+		 * alternative is a keymap-wide state machine bgwl v0 does not have. */
+		if (pressed) {
+			switch (binding) {
+			case BGWL_BIND_TERMINAL:
+				if (!bgwl_spawn(server, server->cfg.terminal)) {
+					wlr_log(WLR_ERROR, "failed to launch terminal '%s'",
+						server->cfg.terminal);
+				}
+				break;
+			case BGWL_BIND_PANEL:
+				bgwl_panel_toggle(server);
+				break;
+			case BGWL_BIND_LAYOUT:
+				bgwl_keyboard_switch_layout(keyboard);
+				break;
+			case BGWL_BIND_EXIT:
+				bgwl_server_terminate(server);
+				break;
+			default:
+				break;
+			}
+		}
+		return;
 	}
+
+	wlr_seat_set_keyboard(seat, keyboard->wlr_keyboard);
+	wlr_seat_keyboard_notify_key(seat, event->time_msec, event->keycode,
+		event->state);
 }
 
 static void keyboard_handle_destroy(struct wl_listener *listener, void *data) {
@@ -204,9 +198,9 @@ static void server_add_keyboard(struct bgwl_server *server,
 
 static void server_add_pointer(struct bgwl_server *server,
 		struct wlr_input_device *device) {
-	if (!wlr_cursor_attach_input_device(server->cursor, device)) {
-		wlr_log(WLR_ERROR, "wlr_cursor_attach_input_device failed");
-	}
+	/* Returns void: wlr_cursor only validates the device type internally and
+	 * logs if the device is already attached. */
+	wlr_cursor_attach_input_device(server->cursor, device);
 }
 
 void bgwl_new_input(struct wl_listener *listener, void *data) {
@@ -309,24 +303,13 @@ void bgwl_cursor_button(struct wl_listener *listener, void *data) {
 
 	bgwl_toplevel_focus(toplevel);
 
-	/* A press inside the server-side titlebar starts an interactive move; the
-	 * client never sees these button events because the titlebar is not a
-	 * client surface. */
-	double sx = 0, sy = 0;
-	if (bgwl_surface_at(server, server->cursor->x, server->cursor->y,
-			&sx, &sy) == NULL) {
-		struct wlr_box box;
-		struct wlr_scene_node *node = &toplevel->scene_tree->node;
-		box.x = node->x;
-		box.y = node->y;
-		box.width = toplevel->decor_width;
-		box.height = BGWL_DECOR_HEIGHT;
-		if (box.width > 0 && server->cursor->y < box.y + box.height &&
-				server->cursor->y >= box.y &&
-				server->cursor->x >= box.x &&
-				server->cursor->x < box.x + box.width) {
-			bgwl_toplevel_begin_interactive(toplevel, BGWL_CURSOR_MOVE, 0);
-		}
+	/* A press that lands on the toplevel but not on any client surface hit
+	 * our server-side titlebar: start an interactive move. The client never
+	 * sees these button events, since the titlebar is not its surface. */
+	struct wlr_surface *surface = bgwl_surface_at(server, server->cursor->x,
+		server->cursor->y, NULL, NULL);
+	if (surface == NULL) {
+		bgwl_toplevel_begin_interactive(toplevel, BGWL_CURSOR_MOVE, 0);
 	}
 }
 
@@ -334,6 +317,9 @@ void bgwl_cursor_axis(struct wl_listener *listener, void *data) {
 	struct bgwl_server *server = wl_container_of(listener, server, cursor_axis);
 	struct wlr_pointer_axis_event *event = data;
 
+	/* ВЕРИФИЦИРОВАТЬ: the trailing relative_direction argument. Diffed
+	 * against wlroots 0.18.2, 0.19.3 and 0.20.2 — identical in all three, so
+	 * only re-check this if the pin moves past 0.20.x. */
 	wlr_seat_pointer_notify_axis(server->seat, event->time_msec,
 		event->orientation, event->delta, event->delta_discrete,
 		event->source, event->relative_direction);

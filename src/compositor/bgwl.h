@@ -14,6 +14,13 @@
  * - Layer surfaces live in five scene trees stacked bottom-up:
  *   bg -> bottom -> normal (xdg toplevels) -> top -> overlay.
  *
+/* ВЕРИФИЦИРОВАТЬ: Several structs below read public fields of wlroots types directly
+ * (wlr_keyboard.keymap/modifiers, wlr_xdg_surface.geometry/initial_commit/
+ * initialized/data, wlr_seat.keyboard_state/pointer_state,
+ * wlr_cursor.x/y, wlr_output.name/width/height/scale/current_mode). All of
+ * them exist in wlroots 0.19.3; after any wlroots bump, grep this marker and
+ * re-check each field against the installed headers.
+ *
  * Include guard style: BGWL_* only. Nothing in this header may rely on
  * wlroots' own internal guard macros.
  */
@@ -40,6 +47,7 @@
 #include <wlr/types/wlr_xcursor_manager.h>
 #include <wlr/types/wlr_xdg_shell.h>
 #include <wlr/util/box.h>
+#include <wlr/util/edges.h>
 #include <xkbcommon/xkbcommon.h>
 
 #define BGWL_DECOR_HEIGHT 28
@@ -141,7 +149,6 @@ struct bgwl_server {
 	struct wl_event_source *sigterm_source;
 	struct wl_event_source *sigint_source;
 
-	bool started;
 };
 
 struct bgwl_output {
@@ -190,15 +197,14 @@ struct bgwl_popup {
 };
 
 struct bgwl_layer_surface {
-	struct wl_list link;
 	struct bgwl_server *server;
 	struct wlr_layer_surface_v1 *layer_surface;
 	struct wlr_scene_layer_surface_v1 *scene_layer_surface;
-	struct bgwl_output *output;
 	bool is_panel;
 	struct wl_listener map;
 	struct wl_listener unmap;
 	struct wl_listener commit;
+	struct wl_listener new_popup;
 	struct wl_listener destroy;
 };
 
@@ -238,7 +244,6 @@ void bgwl_new_layer_surface(struct wl_listener *listener, void *data);/* layer.c
 /* --- util.c --- */
 const char *bgwl_env_string(const char *name, const char *fallback);
 bool bgwl_env_color(const char *name, float out[static 4]);
-int bgwl_env_int(const char *name, int fallback);
 void bgwl_config_load(struct bgwl_config *cfg);
 void bgwl_config_finish(struct bgwl_config *cfg);
 /* Spawn a command line through /bin/sh; returns false if it could not even
@@ -256,9 +261,6 @@ struct bgwl_buffer *bgwl_draw_titlebar(struct bgwl_server *server,
 struct bgwl_buffer *bgwl_load_png(const char *path);
 /* Builds the ru+us keymap. Returns NULL on failure. */
 struct xkb_keymap *bgwl_xkb_keymap_new(const struct bgwl_config *cfg);
-
-/* --- output.c --- */
-void bgwl_output_update_background(struct bgwl_output *output);
 
 /* --- view.c --- */
 struct bgwl_toplevel *bgwl_toplevel_create(struct bgwl_server *server,
@@ -278,6 +280,10 @@ void bgwl_toplevel_reset_cursor_mode(struct bgwl_server *server);
 
 /* --- input.c --- */
 void bgwl_keyboard_switch_layout(struct bgwl_keyboard *keyboard);
+
+/* --- xdg.c --- */
+struct bgwl_popup *bgwl_popup_create(struct wlr_xdg_popup *xdg_popup,
+	struct wlr_scene_tree *parent_tree);
 
 /* --- layer.c --- */
 void bgwl_panel_toggle(struct bgwl_server *server);

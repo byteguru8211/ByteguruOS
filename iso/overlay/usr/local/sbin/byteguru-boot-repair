@@ -1,0 +1,342 @@
+#!/usr/bin/env bash
+#
+# byteguru-boot-repair — восстановить EFI-запись ByteguruOS в NVRAM прошивки.
+#
+# ЗАЧЕМ. Обновления Windows (и некоторые BIOS-обновления) сбрасывают BootOrder
+# или удаляют чужие Boot####: запись ByteguruOS исчезает, система не грузится,
+# хотя файлы на ESP целые. Инструмент создаёт запись заново и умеет поставить
+# её первой в BootOrder.
+#
+# ПОЛИТИКА DUAL BOOT (не нарушать):
+#   * Чужие записи — в т.ч. "Windows Boot Manager" — НЕ удаляются никогда.
+#     --delete-stale удаляет только дубликаты с НАШЕЙ меткой.
+#   * ESP сначала находится и монтируется только для чтения, файл загрузчика
+#     проверяется, и только потом пишется NVRAM.
+#   * Любое изменяющее действие проходит через run(); --dry-run показывает их
+#     все, не трогая NVRAM. Монтирование в dry-run выполняется по-настоящему,
+#     иначе проверка «есть ли загрузчик на ESP» была бы невозможна; оно
+#     read-only и откатывается trap'ом.
+#
+# Требования: загрузка через UEFI (не CSM/Legacy), root, пакет efibootmgr.
+set -euo pipefail
+
+LABEL_DEFAULT="ByteguruOS"
+PROGRAM_NAME="$(basename "$0")"
+STATUS_TOOL="byteguru-boot-status"
+
+# --- состояние по умолчанию -----------------------------------------------------
+DRY_RUN=0
+SET_ORDER=1
+ESP_OVERRIDE=""
+LOADER_OVERRIDE=""
+LABEL="${LABEL_DEFAULT}"
+DELETE_STALE=0
+
+# --- рабочие переменные ESP/загрузчика ------------------------------------------
+ESP_DEV=""
+ESP_MOUNT=""
+ESP_TMP=0
+LOADER_EFI=""
+BOOT_LINE_PLAIN=""
+BOOTNUM=""
+
+usage() {
+	cat <<EOF
+Использование: sudo ${PROGRAM_NAME} [опции]
+
+${PROGRAM_NAME} создаёт EFI-запись загрузки ByteguruOS в NVRAM прошивки, если
+она пропала (например, после обновления Windows), и опционально ставит её
+первой в BootOrder. Чужие записи не удаляются.
+
+Опции:
+  -n, --dry-run         только показать изменяющие команды (NVRAM не трогается)
+  -h, --help            эта справка
+      --label ИМЯ       имя записи (по умолчанию "${LABEL_DEFAULT}")
+      --esp УСТРОЙСТВО  устройство ESP, например /dev/nvme0n1p1
+                        (по умолчанию: смонтированный /boot/efi или /efi,
+                         иначе поиск vfat-раздела с каталогом EFI/)
+      --loader ПУТЬ     путь загрузчика в нотации EFI, например
+                        '\\EFI\\byteguru\\grubx64.efi (по умолчанию: поиск
+                        среди известных кандидатов на ESP)
+      --keep-order      не менять BootOrder (только найти/создать запись)
+      --delete-stale    удалить дубликаты записей именно ByteguruOS
+
+Примеры:
+  sudo ${PROGRAM_NAME} --dry-run
+  sudo ${PROGRAM_NAME}
+  sudo ${PROGRAM_NAME} --esp /dev/sda1 --loader '\\EFI\\debian\\grubx64.efi'
+EOF
+}
+
+say() { printf '%s: %s\n' "${PROGRAM_NAME}" "$*"; }
+warn() { printf '%s: ПРЕДУПРЕЖДЕНИЕ: %s\n' "${PROGRAM_NAME}" "$*" >&2; }
+die() { printf '%s: ОШИБКА: %s\n' "${PROGRAM_NAME}" "$*" >&2; exit 1; }
+
+run() {
+	# Единственная точка для ВСЕХ изменяющих NVRAM команд.
+	if [ "${DRY_RUN}" -eq 1 ]; then
+		printf 'БУДЕТ ИСПОЛНЕНО: %s\n' "$*"
+		return 0
+	fi
+	printf 'ИСПОЛНЯЮ: %s\n' "$*"
+	"$@"
+}
+
+cleanup() {
+	if [ "${ESP_TMP}" -eq 1 ] && [ -n "${ESP_MOUNT}" ]; then
+		umount "${ESP_MOUNT}" 2>/dev/null || true
+		rmdir "${ESP_MOUNT}" 2>/dev/null || true
+	fi
+}
+trap cleanup EXIT
+
+# --- разбор аргументов ----------------------------------------------------------
+while [ "$#" -gt 0 ]; do
+	case "$1" in
+	-n | --dry-run) DRY_RUN=1 ;;
+	-h | --help)
+		usage
+		exit 0
+		;;
+	--label)
+		[ "$#" -ge 2 ] || die "--label требует значение"
+		LABEL="$2"
+		shift
+		;;
+	--esp)
+		[ "$#" -ge 2 ] || die "--esp требует значение"
+		ESP_OVERRIDE="$2"
+		shift
+		;;
+	--loader)
+		[ "$#" -ge 2 ] || die "--loader требует значение"
+		LOADER_OVERRIDE="$2"
+		shift
+		;;
+	--keep-order) SET_ORDER=0 ;;
+	--delete-stale) DELETE_STALE=1 ;;
+	--)
+		shift
+		break
+		;;
+	-*) die "неизвестная опция: $1 (справка: ${PROGRAM_NAME} -h)" ;;
+	*) die "неожиданный аргумент: $1 (справка: ${PROGRAM_NAME} -h)" ;;
+	esac
+	shift
+done
+
+# --- проверки окружения ---------------------------------------------------------
+# Порядок проверок такой, чтобы человек получил внятное сообщение, а не трейс.
+[ "$(uname -s)" = "Linux" ] || die "не Linux ($(uname -s)); ремонт EFI-загрузчика возможен только внутри Linux-сессии."
+command -v efibootmgr >/dev/null 2>&1 || die "efibootmgr не установлен (apt install efibootmgr)."
+command -v lsblk >/dev/null 2>&1 || die "lsblk не найден (пакет util-linux)."
+command -v findmnt >/dev/null 2>&1 || die "findmnt не найден (пакет util-linux)."
+
+if [ ! -d /sys/firmware/efi ]; then
+	die "нет /sys/firmware/efi — система загружена не через UEFI (CSM/Legacy). EFI-записи неприменимы: смените режим загрузки в прошивке."
+fi
+
+# efivarfs обязан быть смонтирован; в штатной системе это делает udev, в
+# спасательном окружении — нет.
+if [ ! -d /sys/firmware/efi/efivars ] || [ -z "$(ls -A /sys/firmware/efi/efivars 2>/dev/null || true)" ]; then
+	mount -t efivarfs efivarfs /sys/firmware/efi/efivars 2>/dev/null ||
+		die "не удалось смонтировать efivarfs в /sys/firmware/efi/efivars (нужен root и ядро с EFIVAR_FS=y/m)."
+fi
+
+[ "$(id -u)" -eq 0 ] || die "нужны права root: sudo ${PROGRAM_NAME} --dry-run"
+
+# --- поиск ESP ------------------------------------------------------------------
+find_esp_mounted() {
+	local mp src
+	for mp in /boot/efi /efi /boot; do
+		[ -d "${mp}" ] || continue
+		src="$(findmnt -n -o SOURCE --target "${mp}" 2>/dev/null || true)"
+		case "${src}" in
+		/dev/*) printf '%s\n' "${src}"; return 0 ;;
+		esac
+	done
+	return 1
+}
+
+probe_vfat_for_efi() {
+	# ESP не смонтирован: перебираем vfat-разделы, монтируем каждый только для
+	# чтения в ОДНУ временную точку и смотрим, есть ли там каталог EFI/.
+	local cand tmp
+	tmp="$(mktemp -d /run/byteguru-esp-probe.XXXXXX)" || return 1
+	while read -r cand; do
+		[ -n "${cand}" ] || continue
+		[ -b "${cand}" ] || continue
+		if mount -o ro,uid=0,fmask=0077,dmask=0077 "${cand}" "${tmp}" 2>/dev/null; then
+			local found=0
+			[ -d "${tmp}/EFI" ] && found=1
+			umount "${tmp}" 2>/dev/null || true
+			if [ "${found}" -eq 1 ]; then
+				rmdir "${tmp}" 2>/dev/null || true
+				printf '%s\n' "${cand}"
+				return 0
+			fi
+		fi
+	done < <(lsblk -nro NAME,FSTYPE -p -e 7 2>/dev/null | awk '$2=="vfat" { print $1 }')
+	rmdir "${tmp}" 2>/dev/null || true
+	return 1
+}
+
+if [ -n "${ESP_OVERRIDE}" ]; then
+	ESP_DEV="${ESP_OVERRIDE}"
+else
+	ESP_DEV="$(find_esp_mounted || true)"
+	if [ -z "${ESP_DEV}" ]; then
+		warn "ESP не смонтирован — ищу vfat-раздел с каталогом EFI/ (только чтение)"
+		ESP_DEV="$(probe_vfat_for_efi || true)"
+	fi
+fi
+
+[ -n "${ESP_DEV}" ] || die "ESP не найден. Укажите устройство явно: sudo ${PROGRAM_NAME} --esp /dev/nvme0n1p1"
+[ -b "${ESP_DEV}" ] || die "${ESP_DEV} не является блочным устройством"
+
+# --- диск и номер раздела для efibootmgr ----------------------------------------
+# lsblk PKNAME/PARTN надёжнее парсинга имён (sda2, nvme0n1p2, mmcblk0p1).
+DISK_NAME="$(lsblk -nro PKNAME "${ESP_DEV}" 2>/dev/null | head -n1 || true)"
+PART_NUM="$(lsblk -nro PARTN "${ESP_DEV}" 2>/dev/null | head -n1 || true)"
+[ -n "${DISK_NAME}" ] || die "не удалось определить родительский диск для ${ESP_DEV} (передайте --esp правильно)"
+[ -n "${PART_NUM}" ] || die "не удалось определить номер раздела для ${ESP_DEV}"
+DISK_DEV="/dev/${DISK_NAME}"
+[ -b "${DISK_DEV}" ] || die "${DISK_DEV} не является блочным устройством"
+say "ESP: ${ESP_DEV} (диск ${DISK_DEV}, раздел ${PART_NUM})"
+
+# --- монтируем ESP (read-only) для проверки загрузчика ---------------------------
+ESP_MOUNT="$(findmnt -n -o TARGET --source "${ESP_DEV}" 2>/dev/null | head -n1 || true)"
+if [ -z "${ESP_MOUNT}" ]; then
+	ESP_MOUNT="$(mktemp -d /run/byteguru-esp.XXXXXX)" || die "mktemp не удался"
+	ESP_TMP=1
+	# vfat без mask'ов показывает файлы ESP world-writable-ish; ограничиваем.
+	mount -o ro,uid=0,fmask=0077,dmask=0077 "${ESP_DEV}" "${ESP_MOUNT}" ||
+		die "не удалось смонтировать ${ESP_DEV} в ${ESP_MOUNT} (только для чтения; нужно root)"
+fi
+
+# --- поиск файла загрузчика ------------------------------------------------------
+if [ -n "${LOADER_OVERRIDE}" ]; then
+	LOADER_EFI="${LOADER_OVERRIDE}"
+else
+	# Кандидаты в порядке предпочтения. Пути реальные для Debian-семейства:
+	#   EFI\byteguru\*  — наш будущий пакет grub-efi с собственной директорией;
+	#   EFI\debian\*    — как кладёт grub-efi-amd64 по умолчанию (и live-build);
+	#   EFI\boot\bootx64.efi — removable-путь, который прошивка использует,
+	#                     когда запись в NVRAM вообще не создавалась.
+	for cand in \
+		"EFI/byteguru/grubx64.efi" \
+		"EFI/byteguru/bootx64.efi" \
+		"EFI/debian/grubx64.efi" \
+		"EFI/boot/bootx64.efi"; do
+		if [ -f "${ESP_MOUNT}/${cand}" ]; then
+			LOADER_EFI="\\${cand}"
+			say "найден загрузчик: ${LOADER_EFI}"
+			break
+		fi
+	done
+fi
+
+if [ -z "${LOADER_EFI}" ]; then
+	die "на ${ESP_DEV} нет известного EFI-загрузчика. Установите его (grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id=byteguru) или передайте --loader явно; содержимое ESP покажет ${STATUS_TOOL}."
+fi
+# EFI хочет обратные слеши.
+LOADER_ARG="$(printf '%s' "${LOADER_EFI}" | tr '/' '\\')"
+
+# --- есть ли уже наша запись -----------------------------------------------------
+# Парсим_plain_`efibootmgr` (без -v): строки вида "Boot0001* ByteguruOS".
+# Метка сравнивается ПОЛНОСТЬЮ, чтобы не удалить/не спутать чужую запись.
+BOOT_LINE_PLAIN="$(efibootmgr 2>/dev/null || true)"
+if [ -z "${BOOT_LINE_PLAIN}" ]; then
+	warn "efibootmgr не вернул записей (пустой NVRAM?) — буду создавать новую"
+fi
+
+find_our_bootnum() {
+	local line entry_num entry_label
+	while IFS= read -r line; do
+		case "${line}" in
+		Boot[0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f]*) ;;
+		*) continue ;;
+		esac
+		# "Boot" = 4 символа, далее 4 шестнадцатеричных цифры номера.
+		entry_num="$(printf '%s' "${line}" | cut -c5-8)"
+		entry_label="$(printf '%s' "${line}" | cut -c9- | sed -e 's/^[*+[:space:]]*//' -e 's/[[:space:]]*$//')"
+		if [ "${entry_label}" = "${LABEL}" ]; then
+			printf '%s\n' "${entry_num}"
+			return 0
+		fi
+	done <<<"${BOOT_LINE_PLAIN}"
+	return 1
+}
+
+if BOOTNUM_FOUND="$(find_our_bootnum)"; then
+	BOOTNUM="${BOOTNUM_FOUND}"
+	say "запись «${LABEL}» уже есть в NVRAM: Boot${BOOTNUM} — создавать вторую не буду"
+else
+	BOOTNUM=""
+	run efibootmgr --create --disk "${DISK_DEV}" --part "${PART_NUM}" \
+		--label "${LABEL}" --loader "${LOADER_ARG}" ||
+		die "efibootmgr --create не удался. Типичная причина — переполненная NVRAM: освободите место вручную (efibootmgr --delete --bootnum XXXX для ЗАВЕДОМО мёртвых записей); автоматом мы не удаляем ничье."
+	if [ "${DRY_RUN}" -eq 1 ]; then
+		say "dry-run: номер будет назначен прошивкой при реальном запуске"
+	else
+		BOOT_LINE_PLAIN="$(efibootmgr 2>/dev/null || true)"
+		if BOOTNUM_FOUND="$(find_our_bootnum)"; then
+			BOOTNUM="${BOOTNUM_FOUND}"
+		fi
+	fi
+fi
+
+[ -n "${BOOTNUM}" ] || {
+	if [ "${DRY_RUN}" -eq 1 ]; then
+		say "dry-run: BootOrder не пересчитывается (номер записи ещё не известен)"
+		exit 0
+	fi
+	die "не удалось определить номер созданной/найденной записи"
+}
+
+say "Рабочая запись: Boot${BOOTNUM} «${LABEL}» -> ${LOADER_ARG}"
+
+# --- дубликаты (только по явному запросу, только наша метка) --------------------
+if [ "${DELETE_STALE}" -eq 1 ]; then
+	dup_found=0
+	while IFS= read -r line; do
+		case "${line}" in
+		Boot[0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f]*) ;;
+		*) continue ;;
+		esac
+		dup_num="$(printf '%s' "${line}" | cut -c5-8)"
+		dup_label="$(printf '%s' "${line}" | cut -c9- | sed -e 's/^[*+[:space:]]*//' -e 's/[[:space:]]*$//')"
+		[ "${dup_label}" = "${LABEL}" ] || continue
+		[ "${dup_num}" != "${BOOTNUM}" ] || continue
+		dup_found=1
+		warn "удаляю дубликат нашей записи Boot${dup_num}"
+		run efibootmgr --delete --bootnum "${dup_num}" || warn "не удалось удалить Boot${dup_num}"
+	done <<<"${BOOT_LINE_PLAIN}"
+	[ "${dup_found}" -eq 1 ] || say "дубликатов «${LABEL}» не найдено"
+fi
+
+# --- BootOrder -------------------------------------------------------------------
+if [ "${SET_ORDER}" -eq 1 ]; then
+	CURRENT_ORDER="$(efibootmgr 2>/dev/null | sed -n 's/^BootOrder: //p' | head -n1 || true)"
+	if [ -z "${CURRENT_ORDER}" ]; then
+		warn "BootOrder не читается — порядок не меняю (запись Boot${BOOTNUM} доступна в меню прошивки)"
+	else
+		# Наша запись первая; все остальные — включая Windows — сохраняются в
+		# исходном порядке; дубликаты нашей вычеркнуты.
+		NEW_ORDER="$(printf '%s\n' "${CURRENT_ORDER}" | tr ',' '\n' | sed '/^$/d' |
+			awk -v mine="${BOOTNUM}" '
+				BEGIN { printf "%s", mine }
+				toupper($0) != toupper(mine) { printf ",%s", $0 }')"
+		say "BootOrder: было ${CURRENT_ORDER}"
+		say "BootOrder: станет ${NEW_ORDER}"
+		run efibootmgr --bootorder "${NEW_ORDER}" || warn "не удалось задать BootOrder"
+	fi
+else
+	say "BootOrder не меняю (--keep-order); запись Boot${BOOTNUM} создана/найдена."
+fi
+
+# --- итог -------------------------------------------------------------------------
+say "Готово. Текущее состояние NVRAM (первые строки):"
+efibootmgr -v 2>/dev/null | sed -n '1,40p' || true
+say "Проверка после перезагрузки: sudo ${STATUS_TOOL}"
+exit 0

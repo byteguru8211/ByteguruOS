@@ -1,0 +1,150 @@
+ByteguruOS — ручной путь установки первого образа
+=================================================
+
+ПОЧЕМУ РУЧНОЙ ПУТЬ, А НЕ CALAMARES
+----------------------------------
+В trixie calamares есть (3.3.14-1), но он требует branding-пакета, набора
+модулей и их конфигов, Qt-зависимостей и отдельного тестирования каждого
+сценария. Для первого релиза это больший риск, чем ценность: ошибка
+установщика стоит пользователю переустановку системы. Решение проекта (см.
+build/live/auto/config): СЕЙЧАС — документированный ручной путь, НИЖЕ по
+плану — calamares или собственный установщик поверх той же live-build rootfs.
+Никаких «заготовок» модулей calamares здесь намеренно нет.
+
+Объём: ~15 минут, нужны базовые навыки работы с терминалом.
+Все команды выполняются в live-сессии, загруженной с ISO (пункт «Требует root»
+указан там, где это не obvious).
+
+0. Предварительные проверки
+---------------------------
+   sudo -i                                  # дальше все команды от root
+   [ -d /sys/firmware/efi ] && echo UEFI || echo "BIOS/CSM"
+   lsblk -o NAME,SIZE,TYPE,FSTYPE,MOUNTPOINT
+   os-prober                                 # что прошивка/диск уже знают
+   efibootmgr -v | head -20                 # текущие EFI-записи
+
+   Требование к прошивке: Secure Boot ВЫКЛЮЧЕН. Первый образ не подписан
+   (shim-подпись — отдельный этап), поэтому на включённом Secure Boot он не
+   загрузится. В VirtualBox: Machine -> Settings -> System -> Motherboard ->
+   Enable EFI (тогда же снимите галку Secure Boot, если она появилась).
+
+1. Разметка: ИСПОЛЬЗУЕМ существующий ESP, не создаём новый
+----------------------------------------------------------
+   Windows уже имеет ESP (обычно 100-500 МБ, vfat, тип EF00/D0A03348-...-1D2).
+   МЫ ЕГО НЕ ФОРМАТИРУЕМ: на нём лежит загрузчик Windows, потеря = нерабочая
+   Windows. Добавляем только свой каталог \EFI\byteguru\.
+
+   Создать корневой раздел (пример для /dev/nvme0n1, на освободившемся месте):
+       cgdisk /dev/nvme0n1        # или fdisk; тип раздела — Linux filesystem
+                                  # (0FC63DAF-8483-4772-8E79-3D69D8477DE4)
+   Имена разделов ниже меняйте на свои: T — корень, E — ESP.
+
+   T=/dev/nvme0n1p3               # корень ByteguruOS
+   E=/dev/nvme0n1p1               # существующий ESP Windows
+
+2. Файловая система
+-------------------
+   Вариант A (проще, консервативно):
+       mkfs.ext4 -L byteguru-root /dev/nvme0n1p3
+   Вариант B (btrfs — снапшоты полезны до появления immutable-root):
+       mkfs.btrfs -L byteguru-root /dev/nvme0n1p3
+       mount -o compress=zstd,subvol=/ /dev/nvme0n1p3 /mnt
+       btrfs subvolume create /mnt/@
+       umount /mnt
+       mount -o compress=zstd,subvol=/@ /dev/nvme0n1p3 /mnt
+   Для варианта B подтома /home не делаем — первый образ не создаёт отдельный
+   /home, чтобы не плодить расхождение с образом.
+
+3. Монтаж и перенос системы
+---------------------------
+   mount /dev/nvme0n1p3 /mnt
+   mkdir -p /mnt/boot/efi
+   mount /dev/nvme0n1p1 /mnt/boot/efi          # тот самый ESP Windows
+
+   # Быстрый и точный путь: распаковать squashfs live-образа в корень.
+   # Точный путь к squashfs в live-сессии проверьте: ls /run/live/medium/live/
+   ls /run/live/medium/live/filesystem.squashfs
+   unsquashfs -f -d /mnt /run/live/medium/live/filesystem.squashfs
+   # Альтернатива (полная пересборка базы из зеркал, дольше, но «с нуля»):
+   #   debootstrap trixie /mnt http://deb.debian.org/debian/
+
+4. Псевдо-файловые системы и chroot
+-----------------------------------
+   for d in dev dev/pts proc sys run; do mount --rbind /$d /mnt/$d; done
+   mount --make-rslave /mnt/dev /mnt/proc /mnt/sys /mnt/run 2>/dev/null || true
+   cp /etc/resolv.conf /mnt/etc/resolv.conf
+   chroot /mnt /bin/bash
+
+5. Внутри chroot
+-----------------
+   # fstab по UUID (имена устройств меняются, UUID — нет)
+   ROOT_UUID="$(blkid -s UUID -o value /dev/nvme0n1p3)"
+   ESP_UUID="$(blkid -s UUID -o value /dev/nvme0n1p1)"
+   {
+     echo "UUID=${ROOT_UUID}  /        ext4  errors=remount-ro  0 1"
+     echo "UUID=${ESP_UUID}   /boot/efi vfat defaults,x-mount.mkdir  0 1"
+   } >/etc/fstab            # для btrfs замените тип и опции (subvol=/@)
+   mount -a
+
+   # Локаль/время/клавиатура уже в образе (см. /etc/default/locale, /etc/timezone,
+   # /etc/default/keyboard); на всякий случай:
+   locale-gen && update-locale LANG=ru_RU.UTF-8
+
+   # Ядро и initramfs:
+   apt-get update
+   apt-get install -y linux-image-amd64 initramfs-tools
+   update-initramfs -u -k all
+
+   # Загрузчик. --bootloader-id=byteguru -> каталог \EFI\byteguru на ESP.
+   # grub-install НЕ трогает \EFI\Microsoft: мы пишем только свой каталог и
+   # свою запись Boot####.
+   apt-get install -y grub-efi-amd64 os-prober efibootmgr
+   grub-install --target=x86_64-efi --efi-directory=/boot/efi \
+                --bootloader-id=byteguru --no-nvram
+   # os-prober включён нашим /etc/default/grub.d/byteguru-dualboot.cfg
+   grub-mkconfig -o /boot/grub/grub.cfg
+
+   # Пароль и пользователь live-сессии НЕ копируются как есть: live-user
+   # не должен попасть в установленную систему с пустым паролем.
+   passwd
+   useradd -m -G sudo -s /bin/bash byteguru && passwd byteguru
+
+   exit
+
+6. EFI-запись в NVRAM
+---------------------
+   # --no-nvram выше означал, что прошивку мы не трогали; теперь делаем запись
+   # штатным нашим инструментом (он не удаляет чужие записи):
+   byteguru-boot-repair --dry-run
+   byteguru-boot-repair
+   byteguru-boot-status          # проверка: запись есть, позиция в BootOrder
+
+   Если после ближайшего обновления Windows система перестанет грузиться —
+   достаточно снова выполнить: sudo byteguru-boot-repair
+
+7. Первый запуск установленной системы
+--------------------------------------
+   reboot, при необходимости выбрать ByteguruOS в меню прошивки (F12/ESC).
+   Проверить:
+     systemctl status lightdm
+     lsblk -f                       # ESP смонтирован в /boot/efi
+     mount | grep -i ntfs           # NTFS — только ro (политика образа)
+   Разрешить запись на раздел Windows (осознанно!):
+     sudo udisksctl mount -b /dev/sdXn -o rw
+   или постоянный override по UUID — см. /etc/udev/rules.d/90-...rules.
+
+8. Виртуальные машины / тесты
+-----------------------------
+   Виртуализация в образе: гостевые драйверы VirtualBox идут из ядра Debian
+   (vboxguest/vboxsf/vboxvideo), автоматизация шар —
+   /usr/local/bin/byteguru-vboxsf-mount и byteguru-vboxsf.service.
+   Как хост KVM: образ ставит только штатное ядро Debian; qemu/kvm —
+   `apt install qemu-kvm virtinst` по желанию.
+
+9. Известные ограничения первого образа
+----------------------------------------
+   * Нет подписи загрузчика -> Secure Boot недоступен.
+   * Нет A/B и dm-verity: rootfs — обычный ext4/btrfs. dm-verity/dm-integrity
+     уже включены в build/configs/kernel.defconfig, чтобы переход на
+     immutable-образ не требовал пересборки ядра.
+   * Установщик ручной; графического нет намеренно.

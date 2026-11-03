@@ -1,0 +1,24 @@
+# ByteguruOS — клавиатура по умолчанию (читают keyboard-configuration,
+# console-setup и X-сервер; это единственный источник истины для раскладок).
+#
+# pc105 — полноразмерная раскладка с отдельной клавишей «Ё» справа от «1»;
+# для ноутбуков пользователь меняет MODEL на pc104/nodisable через
+# `sudo dpkg-reconfigure keyboard-configuration` (файл перезапишется — это штатно).
+XKBMODEL="pc105"
+
+# us,ru: кириллица вторым языком, переключение Alt+Shift — самая ожидаемая
+# схема для русскоязычного пользователя (соответствует и Windows-привычке,
+# и рекомендации Debian для ru-локали).
+XKBLAYOUT="us,ru"
+XKBVARIANT=""
+
+# alt_shift_toggle — переключение раскладки по Alt+Shift (самая ожидаемая схема
+#   для ru-пользователя, совпадает с привычкой от Windows);
+# compose:rctrl — правый Ctrl как Compose для символов вне базовой раскладки;
+# terminate:ctrl_alt_bksp — Ctrl+Alt+Backspace убивает X-сервер (спасает, когда
+#   графика в VirtualBox зависла; в Debian по умолчанию выключено).
+# Переключение по Caps Lock НАМЕРЕННО не включаем — мешает обычному набору.
+XKBOPTIONS="grp:alt_shift_toggle,compose:rctrl,terminate:ctrl_alt_bksp"
+
+# BACKSPACE=guess — поведение Backspace в консоли по умолчанию (Debian-way).
+BACKSPACE="guess"

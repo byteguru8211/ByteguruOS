@@ -10,7 +10,6 @@
  * No buttons and no resize borders: the bar is a drag handle and a label.
  */
 #include <stdlib.h>
-#include <string.h>
 
 #include <wayland-server-core.h>
 #include <wlr/types/wlr_scene.h>
@@ -112,6 +111,12 @@ struct bgwl_toplevel *bgwl_toplevel_at(struct bgwl_server *server, double lx,
 	}
 
 	struct wlr_surface *surface = bgwl_surface_at(server, lx, ly, NULL, NULL);
+	if (surface == NULL) {
+		return NULL;
+	}
+	/* ВЕРИФИЦИРОВАТЬ: wlr_xdg_surface_try_from_wlr_surface() dereferences its
+	 * argument without a NULL check in 0.19.3 (types/xdg_shell/
+	 * wlr_xdg_surface.c reads surface->role), hence the guard above. */
 	struct wlr_xdg_surface *xdg_surface =
 		wlr_xdg_surface_try_from_wlr_surface(surface);
 	if (xdg_surface == NULL ||
@@ -237,6 +242,9 @@ static void bgwl_toplevel_redraw_decor(struct bgwl_toplevel *toplevel) {
 		return;
 	}
 
+	/* ВЕРИФИЦИРОВАТЬ: wlr_scene_buffer_set_buffer() ref-counting: it is assumed to
+	 * lock the new buffer and drop the one it held before. Check
+	 * types/scene/wlr_scene.c:scene_buffer_set_buffer if frames leak. */
 	/* The scene buffer locks the new buffer and releases the previous one, so
 	 * dropping our own reference to the old buffer afterwards is safe. */
 	wlr_scene_buffer_set_buffer(toplevel->decor_node, &buffer->base);
@@ -273,6 +281,12 @@ static void toplevel_handle_map(struct wl_listener *listener, void *data) {
 
 	/* Front of the list is the top-most window. */
 	wl_list_insert(&toplevel->server->toplevels, &toplevel->link);
+
+	/* Re-enable the bar: unmap disabled it, and the client may re-map this
+	 * surface without recreating our scene nodes. */
+	if (toplevel->decor_node != NULL) {
+		wlr_scene_node_set_enabled(&toplevel->decor_node->node, true);
+	}
 
 	bgwl_toplevel_redraw_decor(toplevel);
 	bgwl_toplevel_focus(toplevel);

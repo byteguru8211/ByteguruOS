@@ -57,13 +57,7 @@ static bool parse_args(int argc, char **argv, struct bgwl_config *cfg) {
 	for (int i = 1; i < argc; i++) {
 		const char *arg = argv[i];
 
-		if (strcmp(arg, "-h") == 0 || strcmp(arg, "--help") == 0) {
-			usage(argv[0]);
-			exit(0);
-		} else if (strcmp(arg, "-v") == 0 || strcmp(arg, "--version") == 0) {
-			printf("bgwl %s (wlroots %s)\n", BGWL_VERSION, WLR_VERSION_STR);
-			exit(0);
-		} else if (strcmp(arg, "-c") == 0 || strcmp(arg, "--command") == 0) {
+		if (strcmp(arg, "-c") == 0 || strcmp(arg, "--command") == 0) {
 			if (i + 1 >= argc) {
 				fprintf(stderr, "%s: %s requires an argument\n",
 					argv[0], arg);
@@ -104,6 +98,22 @@ static bool parse_args(int argc, char **argv, struct bgwl_config *cfg) {
 		return false;
 	}
 	return true;
+}
+
+/* -h and -v are answered before a single wlroots object exists, so querying
+ * the version works on a machine with no DRM device, no input, no session. */
+static void handle_info_args(int argc, char **argv, const char *argv0) {
+	for (int i = 1; i < argc; i++) {
+		const char *arg = argv[i];
+		if (strcmp(arg, "-h") == 0 || strcmp(arg, "--help") == 0) {
+			usage(argv0);
+			exit(0);
+		}
+		if (strcmp(arg, "-v") == 0 || strcmp(arg, "--version") == 0) {
+			printf("bgwl %s (wlroots %s)\n", BGWL_VERSION, WLR_VERSION_STR);
+			exit(0);
+		}
+	}
 }
 
 /* --- backend selection -------------------------------------------------- */
@@ -254,6 +264,24 @@ static void create_scene_trees(struct bgwl_server *server) {
 	}
 }
 
+static void init_server_listeners(struct bgwl_server *server) {
+	/* Every listener is self-linked before use so that the cleanup path in
+	 * bgwl_server_finish() can call wl_list_remove() unconditionally: a
+	 * zero-initialised wl_list would crash on removal, and a partially built
+	 * server is exactly the state we shut down after a failed start. */
+	struct wl_listener *listeners[] = {
+		&server->new_xdg_toplevel, &server->new_xdg_popup,
+		&server->new_layer_surface,
+		&server->cursor_motion, &server->cursor_motion_absolute,
+		&server->cursor_button, &server->cursor_axis, &server->cursor_frame,
+		&server->new_input, &server->new_output,
+		&server->request_cursor, &server->request_set_selection,
+	};
+	for (size_t i = 0; i < sizeof(listeners) / sizeof(listeners[0]); i++) {
+		wl_list_init(&listeners[i]->link);
+	}
+}
+
 void bgwl_server_init(struct bgwl_server *server) {
 	memset(server, 0, sizeof(*server));
 	server->wl_display = wl_display_create();
@@ -268,6 +296,8 @@ void bgwl_server_init(struct bgwl_server *server) {
 	wl_list_init(&server->toplevels);
 	wl_list_init(&server->outputs);
 	wl_list_init(&server->keyboards);
+
+	init_server_listeners(server);
 }
 
 bool bgwl_server_start(struct bgwl_server *server) {
@@ -297,6 +327,9 @@ bool bgwl_server_start(struct bgwl_server *server) {
 		return false;
 	}
 
+	/* ВЕРИФИЦИРОВАТЬ: wlr_compositor_create() argument order and the wl_compositor
+	 * version (5); also wlr_renderer_init_wl_display() is what advertises
+	 * wl_shm via wlr_shm_create_with_renderer(), so no second shm global here. */
 	wlr_compositor_create(server->wl_display, 5, server->renderer);
 	wlr_subcompositor_create(server->wl_display);
 	wlr_data_device_manager_create(server->wl_display);
@@ -403,7 +436,6 @@ bool bgwl_server_start(struct bgwl_server *server) {
 		wlr_log(WLR_ERROR, "wlr_backend_start failed");
 		return false;
 	}
-	server->started = true;
 
 	setenv("WAYLAND_DISPLAY", socket, true);
 	setenv("BGWL_SESSION_TYPE", "wayland", true);
@@ -516,13 +548,16 @@ void bgwl_server_finish(struct bgwl_server *server) {
 int main(int argc, char **argv) {
 	wlr_log_init(WLR_DEBUG, NULL);
 
+	handle_info_args(argc, argv, argv[0]);
+
 	struct bgwl_server server = {0};
+	/* bgwl_server_init() zeroes the struct, so the configuration is loaded
+	 * into it afterwards. */
 	bgwl_server_init(&server);
 	bgwl_config_load(&server.cfg);
 
 	if (!parse_args(argc, argv, &server.cfg)) {
-		bgwl_config_finish(&server.cfg);
-		wl_display_destroy(server.wl_display);
+		bgwl_server_finish(&server);
 		return EXIT_FAILURE;
 	}
 

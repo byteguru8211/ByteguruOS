@@ -1,0 +1,226 @@
+#!/usr/bin/env bash
+#
+# byteguru-vboxsf-mount — примонтировать shared folder VirtualBox.
+#
+# ПОЧЕМУ СВОЙ СКРИПТ, А НЕ Guest Additions. В Debian trixie пакетов
+# virtualbox-guest-utils / -x11 / -dkms НЕТ (проверено по packages.debian.org:
+# из линейки присутствует только virtualbox-guest-additions-iso в non-free).
+# При этом ядро Debian собирает нужные модули:
+#   * vboxguest  -> /dev/vboxguest (канал связи с хостом),
+#   * vboxsf     -> файловая система -t vboxsf (в ядре, начиная с 5.10),
+#   * vboxvideo  -> drm/vboxvideo для экрана.
+# То есть монтирование «шары» возможно без Guest Additions вообще — нужен
+# только сам модуль vboxsf. Скрипт делает ровно это и ничего не выдумывает:
+# если для перечисления имён шар нужен VBoxControl (его даёт только GA), мы
+# честно об этом сообщаем и просим указать имя шары.
+#
+# ИМЕНА ШАР: единственный надёжный источник без GA — список пользователя в
+# /etc/byteguru/vboxsf.conf. VBoxControl используется, если он в системе.
+#
+# Монтируем в ${MOUNT_BASE}/<имя-шары> с правами от группы vboxsf (создаём
+# группу, если её нет) — так доступ получают все, кто в группе, без world-writable.
+set -euo pipefail
+
+PROGRAM_NAME="$(basename "$0")"
+CONF_FILE="/etc/byteguru/vboxsf.conf"
+MOUNT_BASE="/mnt/vbox"
+FS_TYPE="vboxsf"
+FMASK="0137"
+DMASK="0037"
+GROUP="vboxsf"
+ALL=0
+SHARE_NAMES=()
+
+usage() {
+	cat <<EOF
+Использование: sudo ${PROGRAM_NAME} [опции] [имя-шары ...]
+
+Монтирует shared folder VirtualBox (файловая система vboxsf) в ${MOUNT_BASE}/<имя>.
+Без аргументов берёт список общих папок из ${CONF_FILE} (ключ SHARES=).
+
+Опции:
+  -a, --all         примонтировать все шары из конфига (идемпотентно)
+  -l, --list        показать, что уже смонтировано и какие шары доступны
+  -h, --help        эта справка
+      --base КАТАЛОГ  базовый каталог монтирования (по умолчанию ${MOUNT_BASE})
+      --config ФАЙЛ   Альтернативный конфигурационный файл (по умолчанию ${CONF_FILE})
+
+Имена шар чувствительны к регистру — именно так их задал пользователь в
+настройках ВМ (Shared Folders) на хосте.
+
+ПРИМЕР:
+  sudo ${PROGRAM_NAME} docs              # примонтировать шару "docs"
+  sudo ${PROGRAM_NAME} --all             # всё из конфига
+  ${PROGRAM_NAME} --list                 # диагностика (без root тоже работает)
+EOF
+}
+
+say() { printf '%s: %s\n' "${PROGRAM_NAME}" "$*"; }
+warn() { printf '%s: ПРЕДУПРЕЖДЕНИЕ: %s\n' "${PROGRAM_NAME}" "$*" >&2; }
+die() { printf '%s: ОШИБКА: %s\n' "${PROGRAM_NAME}" "$*" >&2; exit 1; }
+
+# --- аргументы ------------------------------------------------------------------
+while [ "$#" -gt 0 ]; do
+	case "$1" in
+	-a | --all) ALL=1 ;;
+	-l | --list)
+		# --list не требует root: только чтение.
+		say "смонтированные vboxsf-тома:"
+		if command -v findmnt >/dev/null 2>&1; then
+			findmnt -n -o TARGET,SOURCE -t "${FS_TYPE}" 2>/dev/null | sed 's/^/  /' || say "  (нет)"
+		else
+			grep -s ' vfat\| vboxsf ' /proc/mounts | awk '{ print "  " $2 }' || say "  (нет)"
+		fi
+		say "шары из конфига (${CONF_FILE}):"
+		if [ -r "${CONF_FILE}" ]; then
+			# Как и в основном пути: конфиг читаем в subshell, чтобы произвольный
+			# код в файле не менял наше окружение.
+			(
+				# shellcheck disable=SC1090
+				. "${CONF_FILE}" 2>/dev/null || true
+				printf '  %s\n' "${SHARES:-<пусто>}"
+			)
+		else
+			say "  конфиг нечитаем или отсутствует"
+		fi
+		say "VBoxControl: $(command -v VBoxControl >/dev/null 2>&1 && echo 'есть' || echo 'нет (Guest Additions не установлены)' )"
+		exit 0
+		;;
+	-h | --help)
+		usage
+		exit 0
+		;;
+	--base)
+		[ "$#" -ge 2 ] || die "--base требует значение"
+		MOUNT_BASE="$2"
+		shift
+		;;
+	--config)
+		[ "$#" -ge 2 ] || die "--config требует значение"
+		CONF_FILE="$2"
+		shift
+		;;
+	--)
+		shift
+		while [ "$#" -gt 0 ]; do
+			SHARE_NAMES+=("$1")
+			shift
+		done
+		break
+		;;
+	-*) die "неизвестная опция: $1 (справка: ${PROGRAM_NAME} -h)" ;;
+	*)
+		SHARE_NAMES+=("$1")
+		;;
+	esac
+	shift
+done
+
+# --- окружение ------------------------------------------------------------------
+[ "$(uname -s)" = "Linux" ] || die "не Linux ($(uname -s)): shared folder VirtualBox монтируется только внутри гостевой ОС."
+
+# Имена шар из конфига, если в командной строке ничего не задано.
+SHARES_CONF=""
+if [ -r "${CONF_FILE}" ]; then
+	# Конфиг — обычный shell-файл ключ=значение; читаем в subshell, чтобы
+	# произвольный код из конфига не трогал наше окружение.
+	SHARES_CONF="$(
+		# shellcheck disable=SC1090
+		. "${CONF_FILE}" 2>/dev/null || true
+		printf '%s' "${SHARES:-}"
+	)"
+fi
+
+if [ "$((${#SHARE_NAMES[@]}))" -eq 0 ]; then
+	if [ "${ALL}" -eq 1 ] || [ -n "${SHARES_CONF}" ]; then
+		for s in ${SHARES_CONF}; do
+			SHARE_NAMES+=("${s}")
+		done
+	fi
+fi
+
+if [ "$((${#SHARE_NAMES[@]}))" -eq 0 ]; then
+	usage >&2
+	die "не указано имя шары. Задайте её аргументом или впишите в ${CONF_FILE} (SHARES=\"docs tmp\"); имена видно в окне настроек ВМ на хосте."
+fi
+
+# --- подготовка ядра/модулей ----------------------------------------------------
+# Проверка наличия гостевого канала: модуль vboxguest создаёт /dev/vboxguest.
+if [ ! -e /dev/vboxguest ]; then
+	say "загружаю модули vboxguest/vboxsf"
+	modprobe vboxguest 2>/dev/null || warn "modprobe vboxguest не удался (модуль может быть встроен в ядро — тогда это не ошибка)"
+	modprobe vboxsf 2>/dev/null || warn "modprobe vboxsf не удался"
+fi
+if [ ! -e /dev/vboxguest ]; then
+	die "нет /dev/vboxguest — значит либо не загружен/собран модуль vboxguest, либо мы вообще не в VirtualBox. Проверьте: lspci -d 80ee: && dmesg | grep -i vbox"
+fi
+if ! grep -qs 'vboxsf' /proc/filesystems; then
+	modprobe vboxsf 2>/dev/null || true
+fi
+if ! grep -qs 'vboxsf' /proc/filesystems; then
+	die "файловая система vboxsf не поддержана ядром (CONFIG_VBOXSF_FS). Соберите ядро из build/configs/kernel.defconfig или используйте штатное ядро Debian."
+fi
+
+# --- группа доступа -------------------------------------------------------------
+# vboxsf не поддерживает chmod; права задаются масками при монтировании, а
+# «кто имеет доступ» определяется группой. Создаём группу vboxsf, если её нет.
+if ! getent group "${GROUP}" >/dev/null 2>&1; then
+	say "создаю группу ${GROUP}"
+	groupadd --system "${GROUP}" || warn "не удалось создать группу ${GROUP}"
+fi
+GROUP_GID="$(getent group "${GROUP}" 2>/dev/null | cut -d: -f3 || true)"
+
+# --- монтирование (идемпотентно) ------------------------------------------------
+mounted=0
+skipped=0
+failed=0
+for share in "${SHARE_NAMES[@]}"; do
+	[ -n "${share}" ] || continue
+	target="${MOUNT_BASE}/${share}"
+
+	# Имя шары попадает в путь — проверяем, что это не инъекция («../», «/»).
+	case "${share}" in
+	*..* | /* | *[[:space:]]*)
+		warn "подозрительное имя шары «${share}» — пропускаю"
+		skipped=$((skipped + 1))
+		continue
+		;;
+	esac
+
+	if command -v findmnt >/dev/null 2>&1 && findmnt -n -o TARGET -t "${FS_TYPE}" 2>/dev/null | grep -qxF "${target}"; then
+		say "уже смонтировано: ${target}"
+		skipped=$((skipped + 1))
+		continue
+	fi
+
+	mkdir -p "${target}" || {
+		warn "не удалось создать ${target}"
+		failed=$((failed + 1))
+		continue
+	}
+	chown "root:${GROUP}" "${target}" 2>/dev/null || true
+	chmod 0750 "${target}" 2>/dev/null || true
+
+	if [ -z "${GROUP_GID}" ]; then
+		warn "группа ${GROUP} не найдена — монтирую без gid="
+		GID_OPT=""
+	else
+		GID_OPT=",gid=${GROUP_GID}"
+	fi
+
+	if mount -t "${FS_TYPE}" -o "fmask=${FMASK},dmask=${DMASK}${GID_OPT}" \
+		"${share}" "${target}" 2>/dev/null; then
+		say "примонтировано: ${share} -> ${target} (группа ${GROUP})"
+		mounted=$((mounted + 1))
+	else
+		warn "не удалось примонтировать шару «${share}». Причина обычно одна из:
+        (1) шара не объявлена в настройках ВМ (Shared Folders) или объявлена без «Auto-mount»;
+        (2) хост ещё не «расшарил» её (после изменения настроек перезапустите ВМ);
+        (3) имя указано с другим регистром."
+		failed=$((failed + 1))
+	fi
+done
+
+say "итог: примонтировано ${mounted}, пропущено ${skipped}, ошибок ${failed}"
+[ "${failed}" -eq 0 ] || exit 1
+exit 0

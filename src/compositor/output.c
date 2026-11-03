@@ -27,7 +27,7 @@ static void bgwl_output_destroy_background(struct bgwl_output *output) {
 	 * destroy above drops it again. */
 }
 
-void bgwl_output_update_background(struct bgwl_output *output) {
+static void bgwl_output_update_background(struct bgwl_output *output) {
 	struct bgwl_server *server = output->server;
 	int width = 0, height = 0;
 	wlr_output_effective_resolution(output->wlr_output, &width, &height);
@@ -78,6 +78,10 @@ void bgwl_output_update_background(struct bgwl_output *output) {
 static void bgwl_output_apply_mode(struct bgwl_output *output) {
 	struct wlr_output *wlr_output = output->wlr_output;
 
+	/* ВЕРИФИЦИРОВАТЬ: the two-argument wlr_output_commit_state() form and
+	 * wlr_output_event_request_state.state. Both were diffed against the
+	 * wlroots 0.18.2, 0.19.3 and 0.20.2 headers and are identical, so this
+	 * only needs re-checking if the pin moves past 0.20.x. */
 	struct wlr_output_state state;
 	wlr_output_state_init(&state);
 	wlr_output_state_set_enabled(&state, true);
@@ -127,7 +131,6 @@ static void output_request_state(struct wl_listener *listener, void *data) {
 
 static void output_destroy(struct wl_listener *listener, void *data) {
 	struct bgwl_output *output = wl_container_of(listener, output, destroy);
-	struct bgwl_server *server = output->server;
 
 	/* The scene output is owned by the output addon machinery in 0.19: it is
 	 * destroyed together with the struct wlr_output, so we must not call
@@ -145,11 +148,9 @@ static void output_destroy(struct wl_listener *listener, void *data) {
 	wl_list_remove(&output->destroy.link);
 	wl_list_remove(&output->link);
 
-	/* Panel surfaces bound to this output lose their only anchor; layer.c
-	 * clears server->panel when the surface itself goes away. */
-	if (server->panel != NULL && server->panel->output == output) {
-		server->panel->output = NULL;
-	}
+	/* Layer surfaces anchored to this output keep pointing at it through
+	 * wlr_layer_surface_v1.output; wlroots clears that pointer itself when
+	 * the output goes away, and layer.c drops the panel reference on unmap. */
 
 	free(output);
 }
@@ -219,5 +220,5 @@ void bgwl_new_output(struct wl_listener *listener, void *data) {
 
 	wlr_log(WLR_INFO, "output '%s' connected (%dx%d, preferred mode %d mHz)",
 		wlr_output->name, wlr_output->width, wlr_output->height,
-		wlr_output->mode != NULL ? wlr_output->mode->refresh : 0);
+		wlr_output->current_mode != NULL ? wlr_output->current_mode->refresh : 0);
 }

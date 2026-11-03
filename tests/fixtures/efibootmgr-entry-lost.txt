@@ -1,0 +1,7 @@
+Time is 191 days 3:02:11 (since Wed Oct 30 01:21:35 1985)
+BIOS Revision: 2.13
+
+BootOrder: 0000,0002,0003
+Boot0000* Windows Boot Manager	HD(1,GPT,8a5f6b6c-1111-2222-3333-444555666777,0x800,0x64000)/File(\EFI\MICROSOFT\BOOT\BOOTMGFW.EFI)WINDOWS.........
+Boot0002* USB Drive : SanDisk	U...B(0,0)/Pci(14,0)USB(0,0)/HD(1,GPT,...)
+Boot0003* Windows Recovery	HD(4,GPT,2b30a9c9-708a-447f-a3a2-9921dd42d37f,0x2e90b2b0,0xee6b8)/File(\RECOVERY\WINDOWS\SRV\ARTS\X64\WINRE.WIM)

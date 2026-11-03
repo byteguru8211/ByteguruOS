@@ -1,0 +1,21 @@
+# Mirrors wlroots' own style: tabs for indentation, GNU-ish braces, 80
+# columns. Keep this close to upstream so diffs against tinywl stay readable.
+---
+BasedOnStyle: GNU
+IndentWidth: 8
+TabWidth: 8
+UseTab: ForIndentation
+ContinuationIndentWidth: 8
+ColumnLimit: 80
+BreakBeforeBraces: Attach
+AllowShortIfStatementsOnASingleLine: false
+AllowShortLoopsOnASingleLine: false
+AllowShortFunctionsOnASingleLine: None
+AlwaysBreakAfterReturnType: TopLevel
+IndentCaseLabels: false
+SpaceAfterCStyleCast: false
+PointerAlignment: Right
+AlignConsecutiveDeclarations: false
+SortIncludes: CaseSensitive
+IncludeBlocks: Preserve
+MaxEmptyLinesToKeep: 1

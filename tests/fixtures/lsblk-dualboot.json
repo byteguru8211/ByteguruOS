@@ -1,0 +1,65 @@
+{
+  "blockdevices": [
+    {
+      "name": "nvme0n1",
+      "type": "disk",
+      "size": 512000000000,
+      "model": "SAMSUNG MZVLB512",
+      "rota": false,
+      "pttype": "gpt",
+      "children": [
+        {
+          "name": "nvme0n1p1",
+          "type": "part",
+          "partno": "1",
+          "size": 104857600,
+          "fstype": "vfat",
+          "label": "System",
+          "uuid": "ABCD-0123",
+          "parttypename": "EFI System",
+          "mountpoint": null
+        },
+        {
+          "name": "nvme0n1p2",
+          "type": "part",
+          "partno": "2",
+          "size": 16777216,
+          "fstype": null,
+          "label": "Microsoft reserved partition",
+          "parttypename": "Microsoft reserved partition",
+          "mountpoint": null
+        },
+        {
+          "name": "nvme0n1p3",
+          "type": "part",
+          "partno": "3",
+          "size": 400000000000,
+          "fstype": "ntfs",
+          "label": "Windows",
+          "uuid": "C0FFEE00",
+          "parttypename": "Basic data partition",
+          "mountpoint": null
+        },
+        {
+          "name": "nvme0n1p4",
+          "type": "part",
+          "partno": "4",
+          "size": 8000000000,
+          "fstype": "ntfs",
+          "label": "Recovery",
+          "parttypename": "Basic data partition",
+          "mountpoint": null
+        }
+      ]
+    },
+    {
+      "name": "sda",
+      "type": "disk",
+      "size": 256000000000,
+      "model": "WD_BLACK",
+      "rota": true,
+      "pttype": "gpt",
+      "children": []
+    }
+  ]
+}
