@@ -1,0 +1,89 @@
+#!/bin/sh
+# Хук live-build: live-пользователь, пароли и автологин.
+#
+# Почему это вообще нужно: без LB_USERS и без автологина live-build не создаёт
+# пользовательскую учётную запись, и lightdm на готовом образе показывает greeter,
+# которому некого показывать — пользователь утыкается в запрос логина. Это ровно
+# та причина, по которой первый собранный ISO просил пароль.
+#
+# Имя 0200-*.chroot: исполняется в chroot после установки пакетов из
+# package-lists, когда lightdm уже в системе и конфиги из iso/overlay на месте.
+# live-build требует исполняемого хука; build/scripts/build-iso.sh выставляет +x,
+# потому что git на Windows бит исполнения не восстанавливает.
+#
+# ВАЖНО ПРО БЕЗОПАСНОСТЬ: live-образ по своей природе не защищён — данные на нём
+# читаются любым, кто загрузился с носителя. Поэтому пароль здесь фиксированный
+# и публично документированный (это соглашение live-образов Debian, а не тайна).
+# Устанавливаемая система пароль обязана задать свой: ручной путь в
+# iso/overlay/usr/share/doc/byteguruos/INSTALL.txt это делает явно.
+
+set -eu
+
+LIVE_USER="${BG_LIVE_USER:-user}"
+LIVE_PASS="${BG_LIVE_PASSWORD:-live}"
+
+echo "хук live-user: создаём пользователя '${LIVE_USER}'" >&2
+
+# --- пользователь live-сессии ---------------------------------------------------
+if ! id "${LIVE_USER}" >/dev/null 2>&1; then
+	# Группы существуют в Debian по умолчанию; несуществующую группу useradd
+	# отверг бы всей командой, поэтому проверяем каждую и собираем список.
+	GROUPS=""
+	for g in cdrom floppy audio video netdev plugdev sudo; do
+		if getent group "${g}" >/dev/null 2>&1; then
+			GROUPS="${GROUPS:+${GROUPS},}${g}"
+		fi
+	done
+	# Кавычки внутри ${VAR:+...} в POSIX sh не работают как кавычки: строка
+	# передалась бы useradd с литеральными " — поэтому две отдельные ветки.
+	if [ -n "${GROUPS}" ]; then
+		useradd -m -s /bin/bash -G "${GROUPS}" "${LIVE_USER}"
+	else
+		echo "ХУК: ни одной известной группы не найдено, создаём без -G" >&2
+		useradd -m -s /bin/bash "${LIVE_USER}"
+	fi
+else
+	echo "хук live-user: пользователь ${LIVE_USER} уже есть, не трогаем" >&2
+fi
+
+printf '%s:%s\n' "${LIVE_USER}" "${LIVE_PASS}" | chpasswd
+printf 'root:%s\n' "${LIVE_PASS}" | chpasswd
+
+# --- автологин в lightdm --------------------------------------------------------
+# Без этой настройки greeter требует пароль от учётки, которую никто не просил
+# вводить; live-сессия по смыслу — «загрузился и работаешь».
+if [ -d /etc/lightdm ]; then
+	mkdir -p /etc/lightdm/lightdm.conf.d
+	cat > /etc/lightdm/lightdm.conf.d/50-byteguru-autologin.conf <<EOF
+[Seat:*]
+autologin-user=${LIVE_USER}
+autologin-user-timeout=0
+greeter-show-manual-login=true
+EOF
+	echo "хук live-user: автологин включён для ${LIVE_USER}" >&2
+else
+	echo "ХУК: /etc/lightdm нет — lightdm не установлен, автологин не настроен" >&2
+fi
+
+# sudo без пароля: в live-сессии это ожидаемое поведение (как в Debian live),
+# файл 440, потому что sudoers.d игнорирует файлы с правами шире.
+if command -v sudo >/dev/null 2>&1; then
+	printf '%s ALL=(ALL) NOPASSWD:ALL\n' "${LIVE_USER}" > "/etc/sudoers.d/90-byteguru-live"
+	chmod 440 "/etc/sudoers.d/90-byteguru-live"
+	if command -v visudo >/dev/null 2>&1; then
+		visudo -cf "/etc/sudoers.d/90-byteguru-live" || {
+			echo "ХУК: sudoers-фрагмент не прошёл проверку visudo, удаляем" >&2
+			rm -f "/etc/sudoers.d/90-byteguru-live"
+		}
+	fi
+fi
+
+# --- домашние каталоги под наши подсистемы --------------------------------------
+# Каталог под окружения WCV создаётся демоном/CLI при установке; здесь только
+# каталог пользовательских данных, чтобы оболочка не падала на первом запуске.
+for d in Documents Downloads; do
+	mkdir -p "/home/${LIVE_USER}/${d}"
+	chown -R "${LIVE_USER}:${LIVE_USER}" "/home/${LIVE_USER}/${d}"
+done
+
+exit 0
