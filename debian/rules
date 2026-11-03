@@ -1,0 +1,29 @@
+#!/usr/bin/make -f
+# Сборка: C-компонент через meson, Python-пакеты копируются явно (см. *.install).
+#
+# Явное копирование вместо dh_python3 выбрано сознательно: четыре независимых
+# python-пакета в четырёх каталогах src/*/*/, и «умный» helper неизбежно смешал
+# бы их в один каталог или потерял часть.
+
+export DEB_BUILD_MAINT_OPTIONS = hardening=+all
+
+%:
+	dh $@
+
+override_dh_auto_configure:
+	meson setup src/compositor build-deb/compositor --prefix=/usr --buildtype=plain
+
+override_dh_auto_build:
+	ninja -C build-deb/compositor
+
+override_dh_auto_test:
+ifeq (,$(filter nocheck,$(DEB_BUILD_OPTIONS)))
+	PYTHONPATH=src/wincompat:src/installer:src/bytegurud:src/shell python3 -m pytest -q tests
+endif
+
+override_dh_auto_install:
+	DESTDIR=$(CURDIR)/debian/tmp ninja -C build-deb/compositor install
+
+clean:
+	dh_clean
+	rm -rf build-deb

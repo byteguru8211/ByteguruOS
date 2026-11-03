@@ -1,0 +1,54 @@
+# Строительное окружение ByteguruOS.
+#
+# Зачем отдельный образ: конфиг live-build в build/live/ написан по документации
+# Debian 13 (trixie), а на ubuntu-24.04 live-build — это 3.0~a57 и debootstrap
+# 1.0.134, которые про trixie не знают. Сборка внутри trixie-контейнера
+# убирает расхождение версий инструментов: одинаковые live-build, debootstrap и
+# grub независимо от того, какой образ раннера достался прогону.
+#
+# Сборка требует привилегированного контейнера: lb монтирует pseudo-filesystems и
+# работает с chroot. Это ожидаемо и допустимо для isolated-раннера CI.
+FROM debian:trixie
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Состав повторяет список зависимостей live-build из Debian: бутстрап, упаковка,
+# EFI/BIOS-загрузчики для гибридного образа и утилиты для ar/rsync.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    live-build \
+    debootstrap \
+    debian-archive-keyring \
+    squashfs-tools \
+    dosfstools \
+    mtools \
+    xorriso \
+    grub-efi-amd64-bin \
+    grub-pc-bin \
+    grub-common \
+    grub2-common \
+    isolinux \
+    syslinux \
+    syslinux-common \
+    syslinux-utils \
+    binutils \
+    dpkg-dev \
+    rsync \
+    curl \
+    wget \
+    git \
+    ca-certificates \
+    gawk \
+    xz-utils \
+    fdisk \
+    sudo \
+ && rm -rf /var/lib/apt/lists/*
+
+# Версии инструментов printing here makes the CI log self-explanatory.
+RUN set -eux; \
+    lb --version || true; \
+    debootstrap --version; \
+    dpkg-query -W -f='${Version}\n' live-build; \
+    xorriso --version | head -n1 || true
+
+WORKDIR /work
+ENTRYPOINT ["/bin/bash"]

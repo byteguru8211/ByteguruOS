@@ -1,0 +1,5 @@
+bin/bgpanel usr/bin
+bin/bglauncher usr/bin
+bin/bgsettings usr/bin
+bin/bgfirstboot usr/bin
+src/shell/bgshell usr/lib/python3/dist-packages

@@ -1,0 +1,32 @@
+# Сборочное окружение для .deb-пакетов ByteguruOS.
+#
+# Отдельный образ (а не Dockerfile.build) потому что наборы зависимостей
+# разные: здесь нужны debhelper/meson/wlroots-dev для компиляции, а live-build
+# для сборки образа не нужен.
+FROM debian:trixie
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    debhelper \
+    dh-python \
+    devscripts \
+    dpkg-dev \
+    meson \
+    ninja-build \
+    pkg-config \
+    libwayland-dev \
+    libxkbcommon-dev \
+    libpixman-1-dev \
+    libcairo2-dev \
+    libwlroots-0.18-dev \
+    python3 \
+    python3-dev \
+    python3-pytest \
+    fakeroot \
+    ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /work
+ENTRYPOINT ["/bin/bash"]

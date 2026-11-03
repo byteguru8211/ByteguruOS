@@ -1,0 +1,2 @@
+bin/bgd usr/bin
+src/bytegurud/bgd usr/lib/python3/dist-packages

@@ -68,64 +68,56 @@ jobs:
           echo "После очистки:"
           df -h / || true
 
-      - name: Установка зависимостей live-build
+      # Сборка идёт внутри debian:trixie, а не в apt-пакетах раннера: конфиг
+      # live-build написан по документации trixie, а ubuntu-24.04 даёт
+      # live-build 3.0~a57 и debootstrap без поддержки trixie. Контейнер делает
+      # версии инструментов совпадающими с конфигурацией.
+      - name: Сборка строительного образа (debian:trixie)
         run: |
           set -euo pipefail
-          sudo apt-get update
-          # --no-install-recommends: recommends у live-build тянут x11-обвязку,
-          # которая на headless-раннере не нужна.
-          # Состав: бутстрап (debootstrap + ключи Debian), упаковка (squashfs-tools,
-          # xorriso), EFI/BIOS-загрузчик для гирида (grub-efi-amd64-bin,
-          # grub-pc-bin, isolinux, syslinux-common, mtools, dosfstools),
-          # инфраструктура (binutils/dpkg-dev для ar, rsync, curl, gawk, xz-utils).
-          sudo apt-get install -y --no-install-recommends \
-            live-build \
-            debootstrap \
-            debian-archive-keyring \
-            squashfs-tools \
-            dosfstools \
-            mtools \
-            xorriso \
-            grub-efi-amd64-bin \
-            grub-pc-bin \
-            grub-common \
-            grub2-common \
-            isolinux \
-            syslinux \
-            syslinux-common \
-            syslinux-utils \
-            binutils \
-            dpkg-dev \
-            rsync \
-            curl \
-            wget \
-            git \
-            gawk \
-            xz-utils \
-            fdisk \
-            ca-certificates
-      # Кэш apt НЕ настроен осознанно: список выше ~25 пакетов, скачивание
-      # занимает меньше минуты, а key от hash пакета-листа получился бы
-      # ложной гарантией воспроизводимости (apt-индексы меняются ежедневно).
-      # Реальное ускорение дал бы только кэш cache/ live-build (--cache true),
-      # который в auto/config выключен ради воспроизводимости.
+          docker --version
+          docker build -f build/docker/Dockerfile.build -t byteguru-build:ci .
 
       - name: Версии инструментов сборки
         run: |
           set -euo pipefail
-          echo "live-build: $(dpkg-query -W -f='${Version}' live-build 2>/dev/null || echo неизвестно)"
-          echo "debootstrap: $(debootstrap --version || echo неизвестно)"
-          echo "xorriso: $(xorriso --version 2>&1 | head -n1 || echo неизвестно)"
-          echo "mksquashfs: $(mksquashfs -version 2>&1 | head -n1 || echo неизвестно)"
-          echo "grub-mkimage: $(grub-mkimage --version 2>&1 | head -n1 || echo неизвестно)"
-          echo "uname: $(uname -a)"
-          command -v lb >/dev/null && echo "lb: ок" || { echo "lb НЕ НАЙДЕН"; exit 1; }
+          docker run --rm -v "${PWD}:/work" -w /work byteguru-build:ci -c '
+            set -euo pipefail
+            echo "live-build: $(dpkg-query -W -f="\${Version}" live-build 2>/dev/null || echo неизвестно)"
+            echo "debootstrap: $(debootstrap --version || echo неизвестно)"
+            echo "xorriso: $(xorriso --version 2>&1 | head -n1 || echo неизвестно)"
+            echo "mksquashfs: $(mksquashfs -version 2>&1 | head -n1 || echo неизвестно)"
+            echo "grub-mkimage: $(grub-mkimage --version 2>&1 | head -n1 || echo неизвестно)"
+            echo "uname: $(uname -a)"
+            command -v lb >/dev/null && echo "lb: ок" || { echo "lb НЕ НАЙДЕН"; exit 1; }
+          '
+
+      # Пакеты собираются до образа: live-build устанавливает .deb из
+      # build/live/config/packages.chroot/, поэтому без этого шага в образе не
+      # будет ни оболочки, ни WinCompat, ни установщика.
+      - name: Сборка .deb-пакетов ByteguruOS
+        run: |
+          set -euo pipefail
+          docker build -f build/docker/Dockerfile.packages -t byteguru-pkgs:ci .
+          docker run --rm -v "${PWD}:/work" -w /work byteguru-pkgs:ci             -c 'bash build/scripts/build-packages.sh'
+
+      - name: Проверка, что пакеты попали в контекст live-build
+        run: |
+          set -euo pipefail
+          count=$(ls build/live/config/packages.chroot/*.deb 2>/dev/null | wc -l)
+          echo "найденo .deb: ${count}"
+          if [ "${count}" -lt 5 ]; then
+            echo "ожидались пакеты byteguru-{compositor,shell,apps-daemon,wincompat,installer,data}" >&2
+            exit 1
+          fi
+          ls -l build/live/config/packages.chroot/
 
       - name: Сборка ISO (build/scripts/build-iso.sh)
         run: |
           set -euo pipefail
-          # Единственная точка входа; внутри — lb config + lb build.
-          sudo -E bash build/scripts/build-iso.sh
+          # --privileged: lb монтирует pseudo-filesystems и работает с chroot.
+          # -v "$PWD:/work": артефакты остаются в workspace и попадают в upload.
+          docker run --privileged --rm             -v "${PWD}:/work"             -w /work             -e DEBIAN_FRONTEND=noninteractive             byteguru-build:ci -c 'bash build/scripts/build-iso.sh'
 
       - name: Контрольная сумма и сводка в job summary
         if: always()
