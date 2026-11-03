@@ -73,6 +73,13 @@ jobs:
           echo "После очистки:"
           df -h / || true
 
+      # Дёшево (~40 с) и ловит то, что иначе стоит 20+ минут прогона: имя
+      # пакета, которого в архиве нет (policykit-1 в trixie заменён на polkitd+pkexec).
+      - name: Проверка имён пакетов по индексу архива trixie
+        run: |
+          set -euo pipefail
+          python3 build/scripts/check-package-names.py --suite trixie --arch amd64
+
       # Сборка идёт внутри debian:trixie, а не в apt-пакетах раннера: конфиг
       # live-build написан по документации trixie, а ubuntu-24.04 даёт
       # live-build 3.0~a57 и debootstrap без поддержки trixie. Контейнер делает

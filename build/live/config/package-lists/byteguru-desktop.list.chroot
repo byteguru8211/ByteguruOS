@@ -38,7 +38,11 @@ blueman
 xdg-utils
 desktop-file-utils
 hicolor-icon-theme
-policykit-1
+# policykit-1 в trixie больше нет: его заменили polkitd + pkexec (проверено по
+# индексу dists/trixie/main|contrib|non-free*/binary-amd64). Утилитам оболочки
+# нужен именно pkexec для polkit-запросов, а сам агент — polkitd.
+polkitd
+pkexec
 
 # --- TODO-VERIFY (проверить на реальном mirror перед первым релизом) -----------
 # fonts-noto-cjk        — широкая типографика; скорее всего есть, но не проверял.
