@@ -1,0 +1,35 @@
+[wcv]
+schema = 1
+id = "cad-legacy-2007"
+name = "САПР локальная (версия 2007)"
+version = "2007.1"
+publisher = "Внутренняя разработка"
+executable = "cad.exe"
+runner = "wine"
+expected_level = "l4"
+tested = false
+comments = "Заявлена защита от ключа USB-параллельного порта: нативно в Wine не работает, путь — перезагрузка в Windows."
+
+[graph]
+path = "auto"
+
+[drives]
+mappings = [
+  { letter = "C", kind = "prefix", mode = "rw" },
+  { letter = "Z", kind = "bind", path = "/srv/proekty", mode = "ro" },
+]
+
+[devices]
+audio = false
+camera = false
+printers = "queue-only"
+
+[filesystem]
+visible = ["/srv/proekty"]
+
+[security]
+apparmor = "enforce"
+seccomp = "strict"
+
+[integration]
+menu = true

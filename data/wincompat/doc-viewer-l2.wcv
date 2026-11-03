@@ -1,0 +1,40 @@
+[wcv]
+schema = 1
+id = "doc-viewer-l2"
+name = "Пакет офисных программ (просмотр)"
+version = "2016"
+publisher = "Microsoft"
+executable = "WINWORD.EXE"
+runner = "wine"
+expected_level = "l2"
+wine = "9.0"
+tested = false
+comments = "Просмотр, печать и простые правки. Проверка орфографии, надстройки и совместная работа через COM нестабильны."
+
+[graph]
+path = "auto"
+
+[drives]
+mappings = [
+  { letter = "C", kind = "prefix", mode = "rw" },
+  { letter = "Z", kind = "bind", path = "/home/%USER%/Документы", mode = "rw" },
+]
+
+[devices]
+audio = true
+camera = false
+printers = "queue-only"
+
+[filesystem]
+visible = ["/home/%USER%/Документы"]
+
+[security]
+apparmor = "enforce"
+seccomp = "strict"
+
+[integration]
+menu = true
+mime = ["application/msword", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"]
+
+[update]
+policy = "disabled"

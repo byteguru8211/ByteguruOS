@@ -1,0 +1,262 @@
+# ISO-сборка ByteguruOS.
+#
+# КОНТЕКСТ СРЕДЫ (ключевое ограничение проекта): у разработчика Windows без
+# WSL/docker/gcc/xorriso, поэтому ISO физически невозможно собрать локально.
+# Этот workflow — ЕДИНСТВЕННЫЙ способ получить образ: он собирается на
+# ubuntu-latest (где есть sudo, loop-устройства и live-build из apt),
+# публикуется артефактом, а дальше пользователь скачивает .iso, проверяет
+# SHA256 и ставит в VirtualBox.
+#
+# runners-образ закреплён явно (ubuntu-24.04), а не "ubuntu-latest": от версии
+# образа зависит версия live-build (в 24.04 это 3.0~a57) и debootstrap (1.0.134).
+# Тихий переезд latest на следующий релиз Ubuntu сменит live-build под ногами.
+name: iso
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+# ISO собирается десятки минут, а Linux-раннеры квотированы: новый пуш в ту же
+# ветку обязан отменять предыдущий незавершённый прогон, иначе очередь
+# забьётся устаревшими сборками.
+concurrency:
+  group: iso-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  DEBIAN_FRONTEND: noninteractive
+
+jobs:
+  iso-amd64:
+    name: Build hybrid ISO (amd64, live-build)
+    runs-on: ubuntu-24.04
+    # 90 минут: bootstrap Debian + установка пакетов + squashfs + ISO. Если
+    # упрёмся в таймаут — значит lists пакетов разрослись, а не что таймаут мал.
+    timeout-minutes: 90
+    steps:
+      - name: Подготовить checkout
+        uses: actions/checkout@v4
+        with:
+          # fetch-depth 0 нужен ради git describe: теги/хэш попадают в имя ISO.
+          # Без истории имя артефакта деградирует до "local" (см. build-iso.sh).
+          fetch-depth: 0
+
+      - name: Освободить место на диске
+        run: |
+          set -euo pipefail
+          echo "До очистки:"
+          df -h / /mnt 2>/dev/null || true
+          # Сборка trixie-образа занимает 8-12 ГБ. На runner'ах Ubuntu заранее
+          # лежат Android SDK и toolcache — для нас они бесполезны, а это ~10 ГБ.
+          # Удаляем только реально существующие пути, чтобы не падать при смене
+          # образа раннера.
+          for p in /usr/local/lib/android /opt/hostedtoolcache/CodeQL /usr/share/dotnet; do
+            if [ -d "${p}" ]; then
+              echo "удаляю ${p}"
+              sudo rm -rf "${p}"
+            fi
+          done
+          sudo apt-get clean || true
+          echo "После очистки:"
+          df -h / || true
+
+      - name: Установка зависимостей live-build
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          # --no-install-recommends: recommends у live-build тянут x11-обвязку,
+          # которая на headless-раннере не нужна.
+          # Состав: бутстрап (debootstrap + ключи Debian), упаковка (squashfs-tools,
+          # xorriso), EFI/BIOS-загрузчик для гирида (grub-efi-amd64-bin,
+          # grub-pc-bin, isolinux, syslinux-common, mtools, dosfstools),
+          # инфраструктура (binutils/dpkg-dev для ar, rsync, curl, gawk, xz-utils).
+          sudo apt-get install -y --no-install-recommends \
+            live-build \
+            debootstrap \
+            debian-archive-keyring \
+            squashfs-tools \
+            dosfstools \
+            mtools \
+            xorriso \
+            grub-efi-amd64-bin \
+            grub-pc-bin \
+            grub-common \
+            grub2-common \
+            isolinux \
+            syslinux \
+            syslinux-common \
+            syslinux-utils \
+            binutils \
+            dpkg-dev \
+            rsync \
+            curl \
+            wget \
+            git \
+            gawk \
+            xz-utils \
+            fdisk \
+            ca-certificates
+      # Кэш apt НЕ настроен осознанно: список выше ~25 пакетов, скачивание
+      # занимает меньше минуты, а key от hash пакета-листа получился бы
+      # ложной гарантией воспроизводимости (apt-индексы меняются ежедневно).
+      # Реальное ускорение дал бы только кэш cache/ live-build (--cache true),
+      # который в auto/config выключен ради воспроизводимости.
+
+      - name: Версии инструментов сборки
+        run: |
+          set -euo pipefail
+          echo "live-build: $(dpkg-query -W -f='${Version}' live-build 2>/dev/null || echo неизвестно)"
+          echo "debootstrap: $(debootstrap --version || echo неизвестно)"
+          echo "xorriso: $(xorriso --version 2>&1 | head -n1 || echo неизвестно)"
+          echo "mksquashfs: $(mksquashfs -version 2>&1 | head -n1 || echo неизвестно)"
+          echo "grub-mkimage: $(grub-mkimage --version 2>&1 | head -n1 || echo неизвестно)"
+          echo "uname: $(uname -a)"
+          command -v lb >/dev/null && echo "lb: ок" || { echo "lb НЕ НАЙДЕН"; exit 1; }
+
+      - name: Сборка ISO (build/scripts/build-iso.sh)
+        run: |
+          set -euo pipefail
+          # Единственная точка входа; внутри — lb config + lb build.
+          sudo -E bash build/scripts/build-iso.sh
+
+      - name: Контрольная сумма и сводка в job summary
+        if: always()
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          isos=(build/out/byteguruos-*.iso)
+          {
+            echo "## ByteguruOS ISO"
+            echo
+            if [ "${#isos[@]}" -eq 0 ]; then
+              echo "**ISO не собран** — смотрите лог шага «Сборка ISO»."
+              echo
+              echo "Частые причины: (1) debootstrap на ubuntu-24.04 не знает trixie,"
+              echo "(2) live-build 3.0~a57 не принимает опцию из auto/config,"
+              echo "(3) кончилось место на диске."
+              exit 0
+            fi
+            for iso in "${isos[@]}"; do
+              sha="$(sha256sum "${iso}" | awk '{ print $1 }')"
+              size="$(du -h "${iso}" | awk '{ print $1 }')"
+              name="$(basename "${iso}")"
+              echo "- **Образ:** \`${name}\`"
+              echo "- **Размер:** ${size}"
+              echo "- **SHA256:** \`${sha}\`"
+              echo "- **Формат:** $(file -b "${iso}" | cut -c1-160)"
+              echo
+              echo "### Установка в VirtualBox"
+              echo "1. Скачать артефакт job'а \`iso-amd64\` (.\`iso\` + \`.iso.sha256\`, 30 дней)."
+              echo "2. Проверить: \`sha256sum -c ${name}.sha256\`"
+              echo "3. Новая ВМ: Linux 2.x 64-bit, UEFI включён, Secure Boot ВЫКЛЮЧЕН."
+              echo "4. Подключить \`${name}\` как оптический диск, загрузиться."
+              echo "5. Ручной путь установки — \`cat /usr/share/doc/byteguruos/INSTALL.txt\`"
+              echo "   в live-сессии; calamares в первом образе намеренно отсутствует."
+              echo
+              echo "> Реальная загрузоспособность в этом workflow НЕ проверяется:"
+              echo "> boot-тест в qemu здесь не запускается (см. TODO ниже)."
+            done
+          } >>"${GITHUB_STEP_SUMMARY}"
+
+      - name: Публикация артефакта (ISO + SHA256, 30 дней)
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: byteguruos-amd64-iso-run${{ github.run_number }}
+          path: |
+            build/out/byteguruos-*.iso
+            build/out/byteguruos-*.iso.sha256
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Что проверить руками после первого успешного прогона
+        if: success()
+        # Только памятка в лог: реальный boot-тест здесь не выполняется.
+        # TODO (следующий этап): qemu boot-smoke-test (qemu-system-x86_64
+        #   -cdrom образ.iso -boot d -no-reboot) с проверкой появления
+        #   приглашения live-сессии — ловит ~90% регрессий загрузчика. Пока не
+        #   делаем: не смешиваем сборку и тестирование в одном job и не
+        #   раздуваем время прогона.
+        run: |
+          set -euo pipefail
+          echo "Чек-лист ручной проверки первого собранного образа:"
+          echo "  [ ] ISO грузится в VirtualBox по UEFI (не только по BIOS)"
+          echo "  [ ] В live-сессии есть Xfce и раскладка us,ru (Alt+Shift)"
+          echo "  [ ] Часовой пояс Europe/Moscow, LANG=ru_RU.UTF-8"
+          echo "  [ ] byteguru-boot-status и byteguru-boot-repair --dry-run не падают"
+          echo "  [ ] NTFS-том Windows монтируется только для чтения (udisksctl mount)"
+          echo "  [ ] Общая папка VirtualBox монтируется byteguru-vboxsf-mount"
+          echo "  [ ] Ручной путь установки из INSTALL.txt проходит на пустом диске"
+
+  lint-shell:
+    name: shellcheck (не блокирующий)
+    runs-on: ubuntu-24.04
+    # TODO: сделать блокирующим (убрать continue-on-error) после разбора всех
+    # предупреждений. Пока намеренно мягко: lint не должен останавливать
+    # поставку образа, а его выводы надо увидеть в первой же сборке.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Установка shellcheck
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends shellcheck
+
+      - name: Синтаксис bash -n для всех shell-файлов
+        run: |
+          set -euo pipefail
+          # git ls-files даёт точный список: только скрипты, без package-lists
+          # (те — не shell, а текст построчно, shellcheck их не понимает).
+          files="$(git ls-files -z \
+            'build/scripts/*.sh' \
+            'build/live/auto/config' \
+            'build/live/config/hooks/*' \
+            'iso/overlay/usr/local/sbin/*' \
+            'iso/overlay/usr/local/bin/*' | tr '\0' '\n')"
+          if [ -z "${files}" ]; then
+            echo "нет файлов для проверки" >&2
+            exit 1
+          fi
+          rc=0
+          while IFS= read -r f; do
+            [ -f "${f}" ] || continue
+            if ! bash -n "${f}"; then
+              echo "bash -n: ошибка синтаксиса: ${f}" >&2
+              rc=1
+            fi
+          done <<<"${files}"
+          exit "${rc}"
+
+      - name: shellcheck -S warning
+        run: |
+          set -euo pipefail
+          if ! command -v shellcheck >/dev/null 2>&1; then
+            echo "shellcheck не установлен — пропускаем (нужен apt-get install shellcheck)"
+            exit 1
+          fi
+          files="$(git ls-files -z \
+            'build/scripts/*.sh' \
+            'build/live/auto/config' \
+            'build/live/config/hooks/*' \
+            'iso/overlay/usr/local/sbin/*' \
+            'iso/overlay/usr/local/bin/*' | tr '\0' '\n')"
+          rc=0
+          while IFS= read -r f; do
+            [ -f "${f}" ] || continue
+            # -x: разбор source'd файлов; -S warning: не тонем в style-подсказках.
+            if ! shellcheck -x -S warning "${f}"; then
+              echo "shellcheck: предупреждения/ошибки в ${f}" >&2
+              rc=1
+            fi
+          done <<<"${files}"
+          exit "${rc}"

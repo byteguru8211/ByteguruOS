@@ -8,26 +8,30 @@
 #
 #   meson setup build . && ninja -C build bgwl && meson test -C build
 #
-# Targets wlroots 0.19.x — see README.md for why that is not 0.18, the version
-# in Debian trixie's stable pocket.
+# Собирается против wlroots 0.18 (Debian 13 trixie — там ISO и собирается) и
+# против 0.19/0.20 (sid). Используемые сигнатуры проверены идентичными в
+# 0.18.2, 0.19.3 и 0.20.2, поэтому порядок поиска — от стабильного релиза.
 
 bgwl_version = '0.0.1'
 
-# Debian's libwlroots-0.19-dev installs its headers under
-# /usr/include/wlroots-0.19 and ships wlroots-0.19.pc, so the versioned module
-# name is the one that works on a stock system.
-# ВЕРИФИЦИРОВАТЬ: other distros may not version the module. If both lookups
-# fail, run `pkg-config --list-all | grep -i wlroots` and use that name.
-bgwl_wlroots_dep = dependency('wlroots-0.19', version: '>= 0.19.0',
-	required: false)
+# Debian ставит версионированные модули (wlroots-0.18.pc) и заголовки в
+# /usr/include/wlroots-0.18; простого libwlroots-dev в trixie больше нет.
+# ВЕРИФИЦИРОВАТЬ: в других дистрибутивах модуль может быть без суффикса —
+# тогда сработает последняя проверка. `pkg-config --list-all | grep -i wlroots`
+bgwl_wlroots_dep = dependency('wlroots-0.18', version: '>= 0.18.0', required: false)
 if not bgwl_wlroots_dep.found()
-	# Unversioned fallback: wlroots built from source as a subproject, or a
-	# distro that does not version the module.
+	bgwl_wlroots_dep = dependency('wlroots-0.19', version: '>= 0.19.0', required: false)
+endif
+if not bgwl_wlroots_dep.found()
+	bgwl_wlroots_dep = dependency('wlroots-0.20', version: '>= 0.20.0', required: false)
+endif
+if not bgwl_wlroots_dep.found()
+	# Собранная из исходников как subproject, либо дистрибутив без версий в имени.
 	bgwl_wlroots_dep = dependency('wlroots', required: false)
 endif
 if not bgwl_wlroots_dep.found()
-	error('wlroots >= 0.19 development files not found. Debian/Ubuntu: ' +
-		'apt-get install libwlroots-0.19-dev')
+	error('wlroots >= 0.18 development files not found. Debian trixie: ' +
+		'apt-get install libwlroots-0.18-dev')
 endif
 
 # These are required by wlroots' own public headers, not by our taste:

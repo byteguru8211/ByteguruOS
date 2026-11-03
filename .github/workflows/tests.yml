@@ -1,0 +1,78 @@
+# Тесты Python-части ByteguruOS (каталог tests/).
+#
+# ВАЖНО: tests/ пишется параллельно другим участником, поэтому workflow
+# намеренно минимальный — он НЕ угадывает структуру тестов, имена модулей или
+# наличие фикстур. Он просто запускает `pytest tests/ -q` на python 3.12 и
+# устанавливает ИСКЛЮЧИТЕЛЬНО pytest (никаких плагинов, requirements.txt,
+# coverage, tox): как только в tests/ появятся реальные зависимости, их должен
+# описать их автор в этом файле осознанно, а не молча подтянуть.
+name: tests
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+# Тесты быстрые, но дешёвые раннеры тоже жалеем: отменяем предыдущий прогон
+# по той же ссылке.
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pytest:
+    name: pytest (python 3.12)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Подготовка python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Установка pytest (ничего кроме него)
+        run: python -m pip install pytest
+
+      - name: Проверка, что каталог tests/ вообще на месте
+        run: |
+          set -euo pipefail
+          if [ ! -d tests ]; then
+            echo "Каталог tests/ отсутствует: модуль тестов ещё не добавлен."
+            echo "Завершаем успешно — тесты пишутся параллельно (см. комментарий в начале файла)."
+            echo "> tests/ ещё не существует — pytest не запускался" >>"${GITHUB_STEP_SUMMARY}"
+            exit 0
+          fi
+          echo "Файлы в tests/:"
+          find tests -maxdepth 2 -type f | sed 's/^/  /' | head -n 50
+
+      - name: pytest tests/ -q
+        run: |
+          set -uo pipefail
+          if [ ! -d tests ]; then
+            echo "tests/ отсутствует — пропуск"
+            exit 0
+          fi
+          rc=0
+          pytest tests/ -q || rc=$?
+          # 5 = «тесты не собраны». Пока tests/ пишется, это штатная ситуация,
+          # а не падение: иной вариант — зелёный CI, который ничего не проверял.
+          if [ "${rc}" -eq 5 ]; then
+            echo "pytest не нашёл ни одного теста (tests/ пишется) — считаем это нормой."
+            echo "> pytest: тесты ещё не добавлены (exit code 5)" >>"${GITHUB_STEP_SUMMARY}"
+            exit 0
+          fi
+          if [ "${rc}" -ne 0 ]; then
+            echo "pytest завершился с кодом ${rc}" >&2
+            echo "> pytest: ПАДЕНИЕ (exit code ${rc})" >>"${GITHUB_STEP_SUMMARY}"
+            exit "${rc}"
+          fi
+          echo "> pytest: успешно" >>"${GITHUB_STEP_SUMMARY}"

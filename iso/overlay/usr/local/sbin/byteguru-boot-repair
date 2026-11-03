@@ -91,6 +91,19 @@ cleanup() {
 trap cleanup EXIT
 
 # --- разбор аргументов ----------------------------------------------------------
+# Политика EFI (метка + кандидаты загрузчиков) берётся из одного файла, который
+# читают и repair, и status: расхождение имени записи между ними — классическое
+# «status говорит ОК, а грузиться не хочет». Клавы CLI всегда перекрывают файл,
+# поэтому source выполняется ДО разбора аргументов.
+EFI_POLICY="/usr/share/byteguru/efi/efi-boot-policy.env"
+LOADER_CANDIDATES="EFI/byteguru/grubx64.efi EFI/byteguru/bootx64.efi EFI/debian/grubx64.efi EFI/boot/bootx64.efi"
+if [ -r "${EFI_POLICY}" ]; then
+	# shellcheck disable=SC1090
+	. "${EFI_POLICY}"
+	[ -n "${BYTEGURU_EFI_LABEL:-}" ] && LABEL="${BYTEGURU_EFI_LABEL}"
+	[ -n "${BYTEGURU_EFI_LOADERS:-}" ] && LOADER_CANDIDATES="${BYTEGURU_EFI_LOADERS}"
+fi
+
 while [ "$#" -gt 0 ]; do
 	case "$1" in
 	-n | --dry-run) DRY_RUN=1 ;;
