@@ -101,6 +101,30 @@ jobs:
           docker build -f build/docker/Dockerfile.packages -t byteguru-pkgs:ci .
           docker run --rm -v "${PWD}:/work" -w /work byteguru-pkgs:ci             -c 'bash build/scripts/build-packages.sh'
 
+      # Лог прогона читается только по авторизации, поэтому хвост ошибки
+      # выгружается в публичный job summary: иначе первый сбой неразбираем для
+      # внешнего наблюдателя и для владельца репозитория без токена.
+      - name: Диагностика падения сборки пакетов
+        if: failure()
+        run: |
+          set -uo pipefail
+          log="build/.debtmp/build-packages.log"
+          {
+            echo "## Diagnosis: сборка пакетов"
+            echo
+            if [ -f "${log}" ]; then
+              echo "Хвост лога dpkg-buildpackage:"
+              echo '```'
+              tail -n 60 "${log}"
+              echo '```'
+            else
+              echo "Лога нет: скрипт завершился до запуска dpkg-buildpackage"                 "(проверка инструментов или отсутствующий контейнер)."
+            fi
+            echo
+            echo "Ожидаемые пакеты: byteguru-compositor, -shell, -apps-daemon,"
+            echo "-wincompat, -installer, -data."
+          } >>"${GITHUB_STEP_SUMMARY}"
+
       - name: Проверка, что пакеты попали в контекст live-build
         run: |
           set -euo pipefail

@@ -40,10 +40,20 @@ rm -f "${OUT_DIR}"/*.deb
 BUILD_TMP="${SRC_DIR}/build/.debtmp"
 mkdir -p "${BUILD_TMP}"
 
-echo ">>> dpkg-buildpackage"
-dpkg-buildpackage -us -uc --build=full \
-	--output-directory="${BUILD_TMP}" \
-	|| { echo "сборка пакетов не удалась" >&2; exit 5; }
+# Вывод сборки пишется и в терминал, и в файл: лог прогона GitHub доступен только
+# по авторизации, а хвост ошибки из артефакта видит кто угодно (см. шаг
+# «Диагностика» в .github/workflows/iso.yml).
+LOG="${BUILD_TMP}/build-packages.log"
+: > "${LOG}"
+
+echo ">>> dpkg-buildpackage (лог: ${LOG})"
+if ! dpkg-buildpackage -us -uc --build=full \
+	--output-directory="${BUILD_TMP}" 2>&1 | tee "${LOG}"; then
+	rc="${PIPESTATUS[0]}"
+	echo "сборка пакетов не удалась (код ${rc}); последние строки лога:" >&2
+	tail -n 40 "${LOG}" >&2
+	exit 5
+fi
 
 shopt -s nullglob
 debs=("${BUILD_TMP}"/*.deb)
