@@ -98,6 +98,15 @@ build/live/auto/config): СЕЙЧАС — документированный р�
    # Загрузчик. --bootloader-id=byteguru -> каталог \EFI\byteguru на ESP.
    # grub-install НЕ трогает \EFI\Microsoft: мы пишем только свой каталог и
    # свою запись Boot####.
+   #
+   # РАСХОЖДЕНИЕ, О КОТОРОМ НАДО ЗНАТЬ: разрабатываемый установщик
+   # (bginstaller) планирует в этой же директории systemd-boot
+   # (\EFI\byteguru\systemd-bootx64.efi), а ручной путь ниже использует GRUB
+   # (\EFI\byteguru\grubx64.efi). Оба варианта корректны и оба находят наши
+   # инструменты: список кандидатов задан в
+   # /usr/share/byteguru/efi/efi-boot-policy.env. При переходе на установщик
+   # этот документ должен быть переписан под systemd-boot — не держать два
+   # разных пути молча.
    apt-get install -y grub-efi-amd64 os-prober efibootmgr
    grub-install --target=x86_64-efi --efi-directory=/boot/efi \
                 --bootloader-id=byteguru --no-nvram

@@ -1,0 +1,9 @@
+#!/usr/bin/env python3
+"""Точка входа менеджера WinCompat (устанавливается как /usr/bin/wcmgr)."""
+
+import sys
+
+from wcmgr.cli import main
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))

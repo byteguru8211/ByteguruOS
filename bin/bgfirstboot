@@ -1,0 +1,7 @@
+#!/usr/bin/env python3
+"""Точка входа мастера первого запуска (устанавливается как /usr/bin/bgfirstboot)."""
+
+from bgshell.ui.firstboot_window import main
+
+if __name__ == "__main__":
+    raise SystemExit(main())

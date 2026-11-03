@@ -96,7 +96,7 @@ trap cleanup EXIT
 # «status говорит ОК, а грузиться не хочет». Клавы CLI всегда перекрывают файл,
 # поэтому source выполняется ДО разбора аргументов.
 EFI_POLICY="/usr/share/byteguru/efi/efi-boot-policy.env"
-LOADER_CANDIDATES="EFI/byteguru/grubx64.efi EFI/byteguru/bootx64.efi EFI/debian/grubx64.efi EFI/boot/bootx64.efi"
+LOADER_CANDIDATES="EFI/byteguru/systemd-bootx64.efi EFI/byteguru/grubx64.efi EFI/byteguru/bootx64.efi EFI/debian/grubx64.efi EFI/boot/bootx64.efi"
 if [ -r "${EFI_POLICY}" ]; then
 	# shellcheck disable=SC1090
 	. "${EFI_POLICY}"

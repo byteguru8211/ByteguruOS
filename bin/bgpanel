@@ -1,0 +1,7 @@
+#!/usr/bin/env python3
+"""Точка входа панели задач (устанавливается как /usr/bin/bgpanel)."""
+
+from bgshell.ui.panel import main
+
+if __name__ == "__main__":
+    raise SystemExit(main())

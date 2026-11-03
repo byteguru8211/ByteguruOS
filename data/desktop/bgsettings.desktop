@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Настройки
+Name[en]=Settings
+Exec=bgsettings
+Icon=preferences-system
+Terminal=false
+Categories=Settings;System;
+StartupWMClass=bgsettings
+Keywords=настройки;клавиатура;тема;windows;загрузка;

@@ -80,7 +80,7 @@ on_error() {
 	printf '[%s]   1) не Linux / нет root (см. guard выше);\n' "${LOG_PREFIX}" >&2
 	printf '[%s]   2) live-build на хосте не знает опцию из auto/config\n' "${LOG_PREFIX}" >&2
 	printf '[%s]      (в Ubuntu 24.04 это 3.0~a57 — сверяйтесь с man lb_config);\n' "${LOG_PREFIX}" >&2
-	printf '[%s]   3) debootstrap не знает суит «%s» — см. --fix-debootstrap ниже по логу;\n' "${LOG_PREFIX}" "${SUITE}" >&2
+	printf '[%s]   3) debootstrap не знает suite «%s» — см. --fix-debootstrap ниже по логу;\n' "${LOG_PREFIX}" "${SUITE}" >&2
 	printf '[%s]   4) падали стадии binary_* (grub-efi/xorriso) — ищите первую\n' "${LOG_PREFIX}" >&2
 	printf '[%s]      ошибку в выводе lb build выше.\n' "${LOG_PREFIX}" >&2
 	printf '[%s] Рабочий каталог сборки: %s\n' "${LOG_PREFIX}" "${LIVE_DIR}" >&2
@@ -174,7 +174,7 @@ done
 [ -d "${LIVE_DIR}" ] || die "нет каталога live-build конфигурации: ${LIVE_DIR}"
 [ -f "${LIVE_DIR}/auto/config" ] || die "нет ${LIVE_DIR}/auto/config"
 
-# --- единственный источник истины по суит/зеркалу: auto/config -------------------------
+# --- единственный источник истины по suite/зеркалу: auto/config -------------------------
 # Значения читаются из конфига, чтобы предпроверки не могли разойтись с реальной
 # сборкой (пин релиза должен жить в одном месте).
 parse_assign() {
@@ -194,15 +194,15 @@ parse_assign() {
 
 SUITE="$(parse_assign BYTEGURU_SUITE trixie)"
 MIRROR="$(parse_assign BYTEGURU_MIRROR http://deb.debian.org/debian/)"
-log "целевая суит: ${SUITE}    зеркало: ${MIRROR}"
+log "целевая suite: ${SUITE}    зеркало: ${MIRROR}"
 
-# --- предпроверка 1: debootstrap должен знать суит --------------------------------------
+# --- предпроверка 1: debootstrap должен знать suite --------------------------------------
 # Ubuntu 24.04 несёт debootstrap 1.0.134; поддержка trixie появилась позже. Без
 # скрипта /usr/share/debootstrap/scripts/<suite> бутстрап падает невнятно.
 # Стандартный приём Debian — симлинк на универсальный скрипт stretch (на него
 # свежие debootstrap ссылают buster/bullseye/bookworm/trixie).
 if [ ! -e "${DEBOOTSTRAP_SCRIPTS_DIR}/${SUITE}" ]; then
-	warn "debootstrap не знает суит «${SUITE}» (нет скрипта в ${DEBOOTSTRAP_SCRIPTS_DIR})"
+	warn "debootstrap не знает suite «${SUITE}» (нет скрипта в ${DEBOOTSTRAP_SCRIPTS_DIR})"
 	if [ -e "${DEBOOTSTRAP_SCRIPTS_DIR}/stretch" ]; then
 		log "создаю симлинк ${SUITE} -> stretch (известный приём для свежих релизов)"
 		ln -sf stretch "${DEBOOTSTRAP_SCRIPTS_DIR}/${SUITE}"
@@ -212,15 +212,15 @@ if [ ! -e "${DEBOOTSTRAP_SCRIPTS_DIR}/${SUITE}" ]; then
 	fi
 fi
 
-# --- предпроверка 2: суит реально доступен на зеркале -----------------------------------
-# Дешёвая проверка, спасает от «Debian заморозил/переименовал suит» через 20 минут
+# --- предпроверка 2: suite реально доступен на зеркале -----------------------------------
+# Дешёвая проверка, спасает от «Debian заморозил/переименовал suite» через 20 минут
 # на бутстрапе.
 if ! curl -fsI --max-time 25 "${MIRROR}dists/${SUITE}/Release" >/dev/null 2>&1; then
-	die "зеркало ${MIRROR} не отдаёт dists/${SUITE}/Release — суит «${SUITE}» там нет
+	die "зеркало ${MIRROR} не отдаёт dists/${SUITE}/Release — suite «${SUITE}» там нет
         (заморожен/переименован/сервер недоступен). Измените BYTEGURU_SUITE в
         ${LIVE_DIR}/auto/config — и больше нигде."
 fi
-log "суит ${SUITE} доступен на зеркале"
+log "suite ${SUITE} доступен на зеркале"
 
 # --- предпроверка 3: ключи архива ---------------------------------------------------------
 if [ ! -f /usr/share/keyrings/debian-archive-keyring.gpg ]; then
