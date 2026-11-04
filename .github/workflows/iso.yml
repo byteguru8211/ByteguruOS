@@ -161,6 +161,14 @@ jobs:
           # -v "$PWD:/work": артефакты остаются в workspace и попадают в upload.
           docker run --privileged --rm             -v "${PWD}:/work"             -w /work             -e DEBIAN_FRONTEND=noninteractive             byteguru-build:ci -c 'bash build/scripts/build-iso.sh'
 
+      # Проверка собранного rootfs: без этого мы гадаем о том, что попало в
+      # образ, потому что лог прогона доступен только по авторизации.
+      # Проверка собранного rootfs перед публикацией артефакта: вывод идёт в
+      # job summary и в аннотации, поэтому причину «опять просит пароль» видно
+      # без авторизованного доступа к логам.
+      - name: Проверка live-пользователя и автологина в rootfs
+        run: bash build/scripts/verify-live-rootfs.sh build/live/chroot
+
       - name: Контрольная сумма и сводка в job summary
         if: always()
         run: |
