@@ -40,14 +40,25 @@ else
 	fi
 fi
 
-SHADOW_LINE="$(grep -E '^user:' "${CHROOT}/etc/shadow" 2>/dev/null || true)"
-SHADOW_HASH="$(printf '%s' "${SHADOW_LINE}" | cut -d: -f2)"
-case "${SHADOW_HASH}" in
-	'' | '*'* | '!'*)
-		fail "в /etc/shadow нет рабочего хэша пароля для user"
-		;;
-	*) note "- пароль user: хэш установлен (${SHADOW_HASH:0:3}...)" ;;
-esac
+# /etc/shadow имеет режим 0640 root:shadow. Без root grep молча вернул бы пустоту,
+# и проверка доложила бы «пароля нет» там, где просто нет доступа — ровно так и
+# вышло в первом прогоне. Эти два случая теперь различаются явно.
+if [ ! -r "${CHROOT}/etc/shadow" ]; then
+	note "- /etc/shadow: **не читается без root** — шаг CI обязан идти под sudo"
+	echo "::warning::нет прав на ${CHROOT}/etc/shadow: вывод про пароль неинформативен"
+else
+	SHADOW_LINE="$(grep -E '^user:' "${CHROOT}/etc/shadow" 2>/dev/null || true)"
+	SHADOW_HASH="$(printf '%s' "${SHADOW_LINE}" | cut -d: -f2)"
+	case "${SHADOW_HASH}" in
+		'' | '*'* | '!'*)
+			# Автологин это не ломает: /etc/pam.d/lightdm-autologin оканчивается
+			# pam_permit.so и входит без пароля. Без хэsha не работают ручной ввод
+			# в greeter'е и sudo с паролем.
+			fail "в /etc/shadow нет рабочего хэша пароля для user (ручной вход в greeter не сработает)"
+			;;
+		*) note "- пароль user: хэш установлен (${SHADOW_HASH:0:3}...)" ;;
+	esac
+fi
 
 for conf in \
 	etc/lightdm/lightdm.conf.d/50-byteguru-autologin.conf \
@@ -59,12 +70,19 @@ for conf in \
 	fi
 done
 
-# Локализация: из-за неверного расположения хуков live-build молча их не
-# исполнял, и это единственный способ заметить такое до загрузки в VirtualBox.
-if grep -q 'ru_RU' "${CHROOT}/etc/default/locale" 2>/dev/null; then
-	note "- локаль: ru_RU в /etc/default/locale (хук 0100 отработал)"
+# Локаль и раскладка: печатаем содержимое, а не только вердикт. По одному
+# «не найдено» невозможно отличить не отработавший хук от файла, перезаписанного
+# более поздней стадией live-build.
+if [ -f "${CHROOT}/etc/default/locale" ]; then
+	note "- \`/etc/default/locale\`: \`$(head -n 2 "${CHROOT}/etc/default/locale" | tr '\n' ' ')\`"
+	grep -q 'ru_RU' "${CHROOT}/etc/default/locale" ||
+		note "- локаль: **ru_RU отсутствует** — хук 0100 не применил LANG"
 else
-	note "- локаль: **ru_RU в /etc/default/locale не найдена** — хук 0100 не отработал"
+	note "- локаль: **/etc/default/locale отсутствует** — хук 0100 не отработал"
+fi
+
+if [ -f "${CHROOT}/etc/default/keyboard" ]; then
+	note "- \`/etc/default/keyboard\`: \`$(tr '\n' ' ' < "${CHROOT}/etc/default/keyboard")\`"
 fi
 
 SESSIONS="$(ls "${CHROOT}/usr/share/xsessions" "${CHROOT}/usr/share/wayland-sessions" 2>/dev/null | tr '\n' ' ')"

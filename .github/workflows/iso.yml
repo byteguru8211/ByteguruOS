@@ -167,7 +167,9 @@ jobs:
       # job summary и в аннотации, поэтому причину «опять просит пароль» видно
       # без авторизованного доступа к логам.
       - name: Проверка live-пользователя и автологина в rootfs
-        run: bash build/scripts/verify-live-rootfs.sh build/live/chroot
+        # sudo нужен для /etc/shadow (0640 root:shadow): без прав проверка
+        # докладывала бы об отсутствии пароля там, где нет только доступа.
+        run: sudo -E bash build/scripts/verify-live-rootfs.sh build/live/chroot
 
       - name: Контрольная сумма и сводка в job summary
         if: always()
@@ -209,7 +211,9 @@ jobs:
           } >>"${GITHUB_STEP_SUMMARY}"
 
       - name: Публикация артефакта (ISO + SHA256, 30 дней)
-        if: success()
+        # always(): собранный образ нужен и когда проверка нашла замечание —
+        # иначе нечем тестировать загрузку, пока правятся мелочи.
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: byteguruos-amd64-iso-run${{ github.run_number }}
