@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Первый запуск
+Name[en]=First run
+Exec=bgfirstboot
+Icon=system-run
+Terminal=false
+NoDisplay=true
+Categories=Settings;System;
+StartupWMClass=bgfirstboot
+Comment=Мастер первоначальной настройки: регион, клавиатура, соседство с Windows

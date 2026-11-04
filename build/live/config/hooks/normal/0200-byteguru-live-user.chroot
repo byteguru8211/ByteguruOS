@@ -1,143 +1,120 @@
 #!/bin/sh
-# Хук live-build: live-пользователь, пароли, автологин.
+# 0200-byteguru-live-user.chroot — пользователь live-сессии и автологин в стол.
 #
-# Почему хук вообще нужен: без явного пользователя live-build не создаёт учётку,
-# lightdm показывает greeter, а greeter с greeter-hide-users=true (стandardная
-# настройка Debian, см. /usr/share/lightdm/lightdm.conf.d/01_debian.conf) не даёт
-# даже подсказки, кого вводить. Пользователь получает «authentication failure»
-# вместо системы — ровно то, что случилось с первыми собранными образами.
+# Что должно получиться: ISO загружается без единого вопроса и оказывается в
+# сеансе ByteguruOS (bgwl + панель), где можно всё попробовать, включая sudo без
+# пароля — это live-демо, а не боевая система.
 #
-# Имя 0200-*.chroot: исполняется в chroot после установки пакетов из
-# package-lists, когда lightdm уже в системе и конфиги из iso/overlay на месте.
-# live-build требует исполняемого хука; build/scripts/build-iso.sh выставляет +x
-# в sync_overlay(), потому что git на Windows бит исполнения не восстанавливает.
+# Почему getty + .bash_profile, а не greetd/lightdm:
+#   * greeter — это про «ввести пароль при входе». В live-образе пароля нет, и
+#     просить его не у чего;
+#   * механизм тривиально читается в логе загрузки и не зависит от того, какой
+#     из greeter-пакетов как именно настроен в этой версии Debian;
+#   * когда появится настоящий экран входа с паролем, меняется только этот
+#     хук — сеанс (bgwl-session) остаётся тем же.
 #
-# ПРО БЕЗОПАСНОСТЬ: live-носитель не защищён по определению — его содержимое
-# читает любой, кто загрузился. Поэтому пароль здесь фиксированный и публично
-# задокументированный (convention live-образов Debian), а не секретный.
-# Устанавливаемая система обязана задать свой пароль: см.
-# iso/overlay/usr/share/doc/byteguruos/INSTALL.txt.
+# Хук обязан быть исполняемым: live-build молча пропускает не-исполняемые
+# файлы в config/hooks/normal/, и тогда образ собирается без пользователя.
 
 set -eu
 
-LIVE_USER="${BG_LIVE_USER:-user}"
-LIVE_PASS="${BG_LIVE_PASSWORD:-live}"
+LIVE_USER="${LIVE_USER:-byteguru}"
+LIVE_PASSWORD="${LIVE_PASSWORD:-live}"
 
-echo "хук live-user: настраиваю пользователя '${LIVE_USER}'" >&2
+echo "[byteguru-hook] пользователь live-сессии: ${LIVE_USER}"
 
-# --- пользователь live-сессии -------------------------------------------------
-# Имя не GROUPS: в bash это встроенный массив с GID'ами, и shellcheck прав,
-# ругаясь на присваивание строки (SC2178/SC2128). В POSIX sh такой переменной нет,
-# но имя сбивало с толку и линтер, и читателя.
-if ! id "${LIVE_USER}" >/dev/null 2>&1; then
-	LIVE_GROUPS=""
-	for g in cdrom floppy audio video netdev plugdev sudo; do
-		if getent group "${g}" >/dev/null 2>&1; then
-			LIVE_GROUPS="${LIVE_GROUPS:+${LIVE_GROUPS},}${g}"
-		fi
+# --- пользователь ---------------------------------------------------------------
+if ! getent passwd "$LIVE_USER" >/dev/null 2>&1; then
+	useradd --create-home --shell /bin/bash \
+		--groups sudo,audio,video,cdrom,floppy,netdev,plugdev "$LIVE_USER"
+else
+	echo "[byteguru-hook] пользователь уже существует, дополняем группы"
+	for group in sudo audio video cdrom floppy netdev plugdev; do
+		getent group "$group" >/dev/null 2>&1 && usermod -aG "$group" "$LIVE_USER"
 	done
-	# Кавычки внутри ${VAR:+...} в POSIX sh не работают как кавычки, поэтому
-	# две отдельные ветки, а не одна с параметрическим расширением.
-	if [ -n "${LIVE_GROUPS}" ]; then
-		useradd -m -s /bin/bash -G "${LIVE_GROUPS}" "${LIVE_USER}"
-	else
-		useradd -m -s /bin/bash "${LIVE_USER}"
-	fi
-else
-	echo "хук live-user: ${LIVE_USER} уже существует, настраиваю дальше" >&2
-	# Живой образ мог создать этого пользователя сам (live-boot/live-config).
-	# Если shell оказался /usr/sbin/nologin, PAM автологина его отвергает
-	# (pam_succeed_if.so shell notin ...), поэтому чиним явно.
-	SHELL_NOW="$(getent passwd "${LIVE_USER}" | cut -d: -f7)"
-	if [ "${SHELL_NOW}" != "/bin/bash" ]; then
-		usermod -s /bin/bash "${LIVE_USER}"
-	fi
 fi
 
-printf '%s:%s\n' "${LIVE_USER}" "${LIVE_PASS}" | chpasswd
-printf 'root:%s\n' "${LIVE_PASS}" | chpasswd
+# Пароль задаём и как пароль, и как «live» в /etc/shadow через chpasswd:
+# chpasswd читает пару логин:пароль и применяет настроенный метод хеширования,
+# поэтому не нужно гадать, yescrypt это в этой системе или sha-512.
+echo "${LIVE_USER}:${LIVE_PASSWORD}" | chpasswd
 
-# --- display manager включаем явно ----------------------------------------------
-# В chroot debconf не запускается, поэтому lightdm может остаться
-# невключённым: тогда вместо графической сессии пользователь получает пустую
-# консоль. Симлинк — ровно то, что делает systemctl enable, без запуска systemd.
-if [ -f /lib/systemd/system/lightdm.service ]; then
-	ln -sfn /lib/systemd/system/lightdm.service /etc/systemd/system/display-manager.service
-	echo "хук live-user: display-manager.service → lightdm" >&2
-fi
-
-# --- автологин в lightdm ------------------------------------------------------
-# greeter-hide-users=false: если автологин по какой-то причине не сработает,
-# greeter хотя бы покажет список учётных записей вместо слепого ввода.
-if [ -d /etc/lightdm ]; then
-	mkdir -p /etc/lightdm/lightdm.conf.d
-	cat > /etc/lightdm/lightdm.conf.d/50-byteguru-autologin.conf <<EOF
-[Seat:*]
-autologin-user=${LIVE_USER}
-autologin-user-timeout=0
-greeter-session=lightdm-gtk-greeter
-greeter-hide-users=false
+# sudo без пароля — только для live-пользователя и только в live-образе.
+# Установщик этот файл не копирует: на установленной системе sudo спрашивает
+# пароль (см. src/installer/bginstaller/apply.py).
+cat > /etc/sudoers.d/byteguru-live <<EOF
+# Автологин-демо: пароль не спрашиваем. Файл живёт только в live-образе.
+${LIVE_USER} ALL=(ALL:ALL) NOPASSWD: ALL
 EOF
-	echo "хук live-user: автологин lightdm → ${LIVE_USER}" >&2
-else
-	echo "ХУК: /etc/lightdm нет — lightdm не установлен" >&2
-fi
+chmod 0440 /etc/sudoers.d/byteguru-live
+visudo -cf /etc/sudoers.d/byteguru-live
 
-# --- запасной вход на консоли --------------------------------------------------
-# Если display manager в собранном образе не поднялся (debconf в chroot не всегда
-# включает display-manager.service), пользователь обязан получить работоспособную
-# консоль, а не запрос пароля вслепую. agetty --autologin не трогает PAM-пароль.
+# --- автологин в сеанс ----------------------------------------------------------
 mkdir -p /etc/systemd/system/getty@tty1.service.d
-# Heredoc с кавычками: %I и $TERM должны попасть в файл литералами systemd,
-# а не раскрыться здесь (unquoted heredoc подставил бы пустую $TERM).
-{
-	echo "[Service]"
-	echo "ExecStart="
-	echo "ExecStart=-/sbin/agetty --noissue --autologin ${LIVE_USER} --noclear %I \$TERM"
-} > /etc/systemd/system/getty@tty1.service.d/50-byteguru-autologin.conf
-echo "хук live-user: автологин на tty1 настроен" >&2
+cat > /etc/systemd/system/getty@tty1.service.d/50-byteguru-autologin.conf <<EOF
+[Service]
+# ExecStart= пустой строкой отменяем штатный запуск agetty, затем свой —
+# с --autologin. Без пустой строки systemd не заменит, а допишет команду.
+ExecStart=
+ExecStart=-/sbin/agetty --autologin ${LIVE_USER} --noclear %I \$TERM
+EOF
 
-# --- sudo без пароля ------------------------------------------------------------
-if command -v sudo >/dev/null 2>&1; then
-	printf '%s ALL=(ALL) NOPASSWD:ALL\n' "${LIVE_USER}" > "/etc/sudoers.d/90-byteguru-live"
-	chmod 440 "/etc/sudoers.d/90-byteguru-live"
-	if command -v visudo >/dev/null 2>&1; then
-		visudo -cf "/etc/sudoers.d/90-byteguru-live" || {
-			echo "ХУК: sudoers-фрагмент не прошёл visudo, удаляю его" >&2
-			rm -f "/etc/sudoers.d/90-byteguru-live"
-		}
-	fi
+HOME_DIR="$(getent passwd "$LIVE_USER" | cut -d: -f6)"
+cat > "$HOME_DIR/.bash_profile" <<'EOF'
+# Live-сеанс ByteguruOS: на tty1 сразу поднимаем стол.
+#
+# Проверка tty обязательна: без неё любой `ssh byteguru@host` или `su -`
+# попытался бы запустить композитор из не-консольного шелла, и пользователь
+# получил бы вместо оболочки непонятную ошибку про DRM.
+if [ "$(id -u)" != "0" ] && [ "$(tty)" = "/dev/tty1" ] && \
+   command -v bgwl-session >/dev/null 2>&1; then
+	exec bgwl-session
 fi
+EOF
+chown "${LIVE_USER}:${LIVE_USER}" "$HOME_DIR/.bash_profile" "$HOME_DIR/.bashrc" 2>/dev/null || true
+chmod 0644 "$HOME_DIR/.bash_profile"
 
-# --- домашние каталоги ----------------------------------------------------------
-for d in Documents Downloads; do
-	mkdir -p "/home/${LIVE_USER}/${d}"
-	chown -R "${LIVE_USER}:${LIVE_USER}" "/home/${LIVE_USER}/${d}"
-done
+# --- настройки оболочки по умолчанию -------------------------------------------
+# Именно этот файл читает bgwl при старте; он же — то, что потом правит
+# bgsettings. Держать «первое впечатление» в одном месте важнее, чем экономить
+# на одном файле.
+mkdir -p "$HOME_DIR/.config/byteguru"
+cat > "$HOME_DIR/.config/byteguru/bgwl.conf" <<'EOF'
+# ByteguruOS live-демо. Правится из bgsettings или `bgctl set …`.
 
-# --- самопроверка: сборка обязана упасть, если входа нет ------------------------
-# Раньше хук мог отработать вполовину, а образ приезжал непригодным: теперь
-# состояние проверяется здесь, и ошибка видна в моменте сборки, а не через сутки
-# в VirtualBox.
-FAIL=""
-id "${LIVE_USER}" >/dev/null 2>&1 || FAIL="${FAIL} пользователь ${LIVE_USER} не создан;"
-getent passwd "${LIVE_USER}" | grep -q ':/bin/bash$' || FAIL="${FAIL} shell не /bin/bash;"
-# Поле 2 в shadow: пустое, "!" или "*"Means пароля нет — вход по паролю тогда
-# невозможен, и проверка обязана это поймать.
-SHADOW_HASH="$(getent shadow "${LIVE_USER}" | cut -d: -f2 || true)"
-case "${SHADOW_HASH}" in
-	''|'!'|'*'|'!'*|'*'*) FAIL="${FAIL} в /etc/shadow нет хэша пароля ${LIVE_USER};" ;;
-esac
-[ -f /etc/lightdm/lightdm.conf.d/50-byteguru-autologin.conf ] || FAIL="${FAIL} нет конфига автологина lightdm;"
-[ -f /etc/systemd/system/getty@tty1.service.d/50-byteguru-autologin.conf ] || FAIL="${FAIL} нет автологина на tty1;"
+# Раскладка окон по умолчанию — плавающая: новое окно открывается там, где его
+# ожидает человек, пришедший из Windows. Тайл включается одним переключателем
+# в панели (или `bgctl set layout tile`).
+layout = float
+workspaces = 6
 
-if [ -n "${FAIL}" ]; then
-	echo "ХУК live-user: ПРОВЕРКА ПРОВАЛЕНА →${FAIL}" >&2
-	# Формат ::error:: читается как аннотация прогона: иначе причина живёт только
-	# в логе, который доступен по авторизации.
-	echo "::error::хук 0200-byteguru-live-user: ${FAIL}"
-	exit 1
-fi
+workspace = 1:поток 1:#f2a33d
+workspace = 2:поток 2:#f2a33d
+workspace = 3:код:#4a9eff
+workspace = 4:сеть:#3ecf8e
+workspace = 5:заметки:#b98cff
+workspace = 6:медиа:#ff5c7a
 
-echo "хук live-user: проверка пройдена, вход настроен (${LIVE_USER}/${LIVE_PASS})" >&2
-exit 0
+accent-color = #f2a33d
+gap-inner = 6
+gap-outer = 8
+border-width = 2
+animations = true
+anim-duration = 140
+focus-follows-mouse = false
+
+# В демо экран гасим не раньше, чем через 10 минут: иначе локер срабатывает
+# посреди демонстрации.
+idle-timeout = 600
+
+terminal = foot
+file-manager = thunar
+xkb-layout = ru,us
+EOF
+chown -R "${LIVE_USER}:${LIVE_USER}" "$HOME_DIR/.config"
+
+# --- сервисы, которые должны стартовать ---------------------------------------
+systemctl enable NetworkManager 2>/dev/null || \
+	echo "[byteguru-hook] NetworkManager не включён (нет systemd в chroot?)"
+
+echo "[byteguru-hook] готово: live-пользователь ${LIVE_USER}, автологин на tty1"

@@ -1,0 +1,195 @@
+/* Заводские именованные цвета: их перекрывает порождённый theme.css,
+   но без них base.css не разоберётся, если theme.css ещё не создан. */
+@define-color accent_color #f2a33d;
+@define-color accent_bg_color #f2a33d;
+@define-color accent_fg_color #101010;
+
+/*
+ * ByteguruOS — базовая тема оболочки.
+ *
+ * Файл подключается поверх системной темы GTK; цвета выбраны так, чтобы текст
+ * читался и на светлом, и на тёмном фоне рабочего стола.
+ */
+
+window.background,
+.application {
+  font-family: "Inter", "Noto Sans", "DejaVu Sans", sans-serif;
+  font-size: 11pt;
+}
+
+/* Панель задач */
+.panel-window {
+  background-image: linear-gradient(to bottom, #1b2838, #14202e);
+  color: #e8eef6;
+  border-top: 1px solid #2b3d52;
+}
+
+.panel-window label,
+.panel-window button {
+  color: #e8eef6;
+}
+
+.panel-window .clock {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  padding: 0 10px;
+}
+
+.panel-window .flat {
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  padding: 4px 10px;
+  border-radius: 6px;
+}
+
+.panel-window .flat:hover {
+  background: rgba(255, 255, 255, 0.10);
+}
+
+.indicator-wincompat {
+  background: #f0a92f;
+  color: #14202e;
+  border-radius: 999px;
+  padding: 1px 9px;
+  font-weight: 600;
+}
+
+.online { color: #7fd6a2; }
+.offline { color: #ef8b8b; }
+.ok { color: #7fd6a2; }
+.bad { color: #ef8b8b; font-weight: 600; }
+
+/* Лаунчер */
+.app-tile {
+  padding: 10px;
+  border-radius: 12px;
+  background: transparent;
+  border: 1px solid transparent;
+}
+
+.app-tile:hover {
+  background: alpha(currentColor, 0.08);
+  border-color: alpha(currentColor, 0.18);
+}
+
+.app-title {
+  font-size: 9.5pt;
+}
+
+.badge {
+  font-size: 8pt;
+  font-weight: 700;
+  border-radius: 999px;
+  padding: 1px 7px;
+}
+
+.badge-proven {
+  background: #1f7a4d;
+  color: #ffffff;
+}
+
+.badge-untested {
+  background: #5a6a7a;
+  color: #eef3f8;
+}
+
+.badge-unsupported {
+  background: #8c2f2f;
+  color: #ffecec;
+}
+
+/* Настройки и мастер */
+.settings-list row {
+  border-bottom: 1px solid alpha(currentColor, 0.08);
+}
+
+.group-title {
+  font-weight: 700;
+  font-size: 10.5pt;
+  padding: 14px 12px 4px;
+  opacity: 0.85;
+}
+
+.dim {
+  opacity: 0.65;
+  font-size: 9pt;
+}
+
+.notice {
+  color: #7a5b00;
+  background: #fff4d6;
+  border-radius: 8px;
+  padding: 6px 10px;
+}
+
+.mono {
+  font-family: "JetBrains Mono", "DejaVu Sans Mono", monospace;
+  font-size: 9.5pt;
+}
+
+/* ---------------------------------------------------------------- блокировка
+   Локер рисуется поверх погашенного стола: фон — сплошной, без блюра, чтобы
+   не платить дополнительным проход рендера за кадр. */
+.bg-lock {
+    background-color: #12151c;
+    color: #e0e2e6;
+}
+.bg-lock-clock {
+    font-size: 4.2em;
+    font-weight: 300;
+    letter-spacing: -0.02em;
+}
+.bg-lock entry {
+    background-color: #181c25;
+    color: #e0e2e6;
+    border: 1px solid #2b313c;
+    border-radius: 10px;
+    padding: 8px 12px;
+}
+.bg-lock entry:focus {
+    border-color: @accent_color;
+    outline: none;
+}
+.bg-lock-error {
+    border-color: #ff6b6b;
+}
+.bg-lock button.suggested-action {
+    background-color: @accent_bg_color;
+    color: @accent_fg_color;
+    border-radius: 10px;
+    padding: 8px 20px;
+}
+
+/* ------------------------------------------------------------------ панель */
+.bg-panel {
+    background-color: #0e1116;
+    color: #e0e2e6;
+    border-bottom: 1px solid #1f242e;
+}
+.bg-status, .bg-clock, .bg-guru {
+    color: #cfd3da;
+}
+.bg-task-focused {
+    background-color: #1f242e;
+    border-radius: 8px;
+}
+.bg-stream-dot {
+    min-width: 8px;
+    min-height: 8px;
+    border-radius: 999px;
+}
+.bg-swatch {
+    min-width: 22px;
+    min-height: 22px;
+    border-radius: 6px;
+    background-image: none;
+    border: 1px solid #2b313c;
+}
+.bg-toast {
+    background-color: #181c25;
+    color: #e0e2e6;
+    border: 1px solid #2b313c;
+    border-radius: 10px;
+    padding: 8px 12px;
+}

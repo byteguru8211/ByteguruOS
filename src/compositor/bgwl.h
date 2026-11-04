@@ -66,6 +66,9 @@
 #define BGWL_DEFAULT_HEADLESS_WIDTH 1280
 #define BGWL_DEFAULT_HEADLESS_HEIGHT 800
 #define BGWL_PANEL_NAMESPACE_PREFIX "bgwl-panel"
+/* The shell's lock screen identifies itself with this namespace; see
+ * bgwl_server_set_locked(). */
+#define BGWL_LOCK_NAMESPACE_PREFIX "bgwl-lock"
 #define BGWL_MAX_WORKSPACES 10
 #define BGWL_MAX_OUTPUTS 8
 #define BGWL_NAME_LEN 48
@@ -315,6 +318,11 @@ struct bgwl_server {
 	 * BGWL_PANEL_NAMESPACE_PREFIX and enables/disables its scene node. */
 	struct bgwl_layer_surface *panel;
 	bool panel_visible;
+	/* Lock surface: a layer client whose namespace starts with
+	 * BGWL_LOCK_NAMESPACE_PREFIX. It is the shell's way to lock without
+	 * ext-session-lock, and bgwl un-locks automatically when it disappears —
+	 * a crashed lock screen must never strand a user in a black session. */
+	struct bgwl_layer_surface *lock_surface;
 
 	struct wl_event_source *sigterm_source;
 	struct wl_event_source *sigint_source;
@@ -423,6 +431,7 @@ struct bgwl_layer_surface {
 	struct wlr_layer_surface_v1 *layer_surface;
 	struct wlr_scene_layer_surface_v1 *scene_layer_surface;
 	bool is_panel;
+	bool is_lock;
 	struct wl_listener map;
 	struct wl_listener unmap;
 	struct wl_listener commit;
@@ -450,6 +459,13 @@ void bgwl_server_warp_cursor_to_center(struct bgwl_server *server);
 struct wlr_box bgwl_server_usable_box(struct bgwl_server *server);
 /* True while a session lock owns the screen (input.c asks before bindings). */
 bool bgwl_server_is_locked(struct bgwl_server *server);
+/* Locks or unlocks the session. Both ext-session-lock (session.c) and the
+ * shell's own lock surface (layer.c, ctl.c) go through this one function, so
+ * there is exactly one definition of "locked". */
+void bgwl_server_set_locked(struct bgwl_server *server, bool locked);
+/* True while an ext-session-lock client owns the screen: the shell's own lock
+ * surface must not be able to unlock it. */
+bool bgwl_session_ext_lock_active(struct bgwl_server *server);
 
 /* Cross-file wl_listener callbacks. They are intentionally not static: each
  * one is installed in server.c and defined in the file that owns the object

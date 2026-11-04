@@ -16,13 +16,27 @@
 # только реализация стадии упаковки rootfs, а вызов build-iso.sh, содержимое
 # iso/overlay/ и скрипты dual boot останутся прежними.
 #
-# ВАЖНО ПРО СРЕДУ. Машина разработчика — Windows, без WSL/docker/xorriso/gcc.
-# Поэтому локально ISO НЕ СОБИРАЕТСЯ, и это не баг: сборка выполняет GitHub
-# Actions на ubuntu-latest (.github/workflows/iso.yml), ОТТУДА образ
-# скачивается и ставится в VirtualBox. Отсюда же — самый первый и самый
-# громкий guard в этом скрипте (проверка uname), чтобы на Windows ошибка была
-# объяснением, а не «тихим» падением.
+# ВАЖНО ПРО СРЕДУ. Сборка требует Linux и root: live-build монтирует rootfs,
+# работает с loop-устройствами и вызывает debootstrap. Локально это Debian 13
+# (trixie) — та же suites, из которой собирается образ; в CI — контейнер
+# debian:trixie (.github/workflows/iso.yml). Проверка uname и EUID в начале —
+# чтобы на неподходящей машине ошибка была объяснением, а не «тихим» падением
+# на середине часового процесса.
 set -euo pipefail
+
+# --- очистка окружения ---------------------------------------------------------
+# Пустой http_proxy= (не отсутствующий, а ПУСТОЙ) — известная ловушка:
+# debootstrap вызывает wget, wget видит переменную, пытается соединиться с
+# «пустым» прокси и зависает без сообщения. Проверено на реальной сборке:
+# bootstrap стоял на скачивании less.deb больше пяти минут при работающем
+# напрямую wget. Поэтому пустые значения снимаем, а заданные — бережём.
+for _var in http_proxy https_proxy ftp_proxy all_proxy HTTP_PROXY HTTPS_PROXY FTP_PROXY ALL_PROXY; do
+	if [ -n "${!_var:-}" ]; then
+		continue
+	fi
+	unset "$_var" 2>/dev/null || true
+done
+export DEBIAN_FRONTEND=noninteractive
 
 # --- пути ----------------------------------------------------------------------------
 SCRIPT_PATH="$(readlink -f "${BASH_SOURCE[0]}")"
@@ -48,8 +62,9 @@ usage() {
 Использование: sudo bash build/scripts/build-iso.sh [опции] [-- extra-args для lb build]
 
 Собирает загрузочный гибрид ISO (UEFI+BIOS) через live-build (\`lb build\`).
-ТРЕБУЕТСЯ Linux и root. На Windows сборка невозможна — для этого настроен
-GitHub Actions (.github/workflows/iso.yml).
+ТРЕБУЕТСЯ Linux и root: live-build монтирует rootfs и squashfs, работает с
+loop-устройствами и вызывает debootstrap. Локально это Debian 13 (trixie),
+в CI — контейнер debian:trixie (.github/workflows/iso.yml).
 
 Опции:
   -c, --clean         \`lb clean\` + удаление build/out, затем сборка с нуля

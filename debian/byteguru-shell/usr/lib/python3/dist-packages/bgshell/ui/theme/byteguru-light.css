@@ -1,0 +1,19 @@
+/* ByteguruOS — светлая тема: только отличия от базовой. */
+
+window.background,
+.application {
+  background-color: #f4f6f9;
+  color: #1c242e;
+}
+
+.settings-list row {
+  background: #ffffff;
+}
+
+.dim {
+  opacity: 0.60;
+}
+
+.app-tile:hover {
+  background: rgba(0, 0, 0, 0.06);
+}

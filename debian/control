@@ -10,60 +10,95 @@ Build-Depends:
  libwayland-dev,
  libxkbcommon-dev,
  libpixman-1-dev,
- libcairo2-dev,
+ libdrm-dev,
  libwlroots-0.18-dev,
+ wayland-protocols,
+ libwayland-bin,
  python3,
 Standards-Version: 4.7.0
 Rules-Requires-Root: no
 
 Package: byteguru-compositor
 Architecture: any
-Depends: ${shlibs:Depends}, ${misc:Depends}, libwlroots-0.18, xkb-data
+Depends: ${shlibs:Depends}, ${misc:Depends}, libwlroots-0.18, xkb-data,
+ wl-clipboard, grim, slurp
 Description: Wayland compositor for ByteguruOS (bgwl)
- Minimal wlroots-based compositor: outputs and hotplug, xdg-shell,
- layer-shell for the panel, libinput with ru/us layouts, simple SSD
- titlebars. No XWayland, no workspaces, no tiling yet.
+ wlroots-based session compositor: streams (workspaces) with per-stream
+ accents, tile/even/floating layouts, real maximise and fullscreen,
+ server-side titlebars with buttons, exclusive zones for the panel,
+ ext-session-lock and idle handling, laptop lid, screencopy and the rest of
+ the protocol set the portals and sandboxed apps need, plus a JSON control
+ socket used by the shell and by bgctl.
 
 Package: byteguru-shell
 Architecture: all
 Section: x11
-Depends: ${python3:Depends}, ${misc:Depends}, python3-gi, gir1.2-gtk-4.0,
- byteguru-data, byteguru-apps-daemon
-Description: ByteguruOS desktop shell components
- Panel, application launcher, settings and first-run wizard built on GTK4.
- The state model (panel, settings schema, wizard routing) is separated from
- the widgets and unit-tested.
+Depends:
+ ${misc:Depends},
+ python3 (>= 3.11),
+ python3-gi,
+ gir1.2-gtk-4.0,
+ gir1.2-adw-1,
+ gir1.2-gtk4layershell-1.0,
+ libgtk4-layer-shell0,
+ gsettings-desktop-schemas,
+ adwaita-icon-theme,
+ fonts-dejavu,
+ byteguru-data,
+ byteguru-apps-daemon,
+ byteguru-compositor,
+Recommends: network-manager, upower, pipewire, power-profiles-daemon,
+ xdg-desktop-portal, xdg-desktop-portal-gtk, thunar, foot
+Description: ByteguruOS desktop shell
+ Panel (streams, window list, machine indicators, quick settings), application
+ launcher, settings window, first-run wizard, lock screen, session entry
+ (bgwl-session) and bgctl. The state model is separated from the widgets and
+ unit-tested; the widgets read the compositor over its control socket instead
+ of keeping a second copy of the truth.
 
 Package: byteguru-apps-daemon
 Architecture: all
 Section: admin
-Depends: ${python3:Depends}, ${misc:Depends}, byteguru-wincompat, flatpak
+Depends:
+ ${misc:Depends},
+ python3 (>= 3.11)
+Recommends: flatpak, byteguru-wincompat
 Description: ByteguruOS session daemon with a unified application model
  Presents Flatpak apps, .desktop entries and WCV manifests as one list and
  returns an executable launch plan, including coverage level and sandbox
- warnings.
+ warnings. WinCompat is an optional dependency: with it removed the system
+ loses the ability to run Windows applications and stays a complete desktop.
 
 Package: byteguru-wincompat
 Architecture: all
 Section: admin
-Depends: ${python3:Depends}, ${misc:Depends}, python3 (>= 3.11),
+Depends:
+ ${misc:Depends},
+ python3 (>= 3.11),
  apparmor, apparmor-utils, wine64 | wine, winetricks, ca-certificates
-# TODO-VERIFY: dxvk в Debian не пакетирован — поставляется отдельным
-# пакетом нашего репозитория; wine64/winetricks сверить с trixie
 Description: WinCompat subsystem for running Windows applications
  WCV manifest validation, per-application prefixes with rollback, drive letter
  and path visibility filter, AppArmor/seccomp policy generation, coverage
- registry where a level is only published from recorded runs.
+ registry where a level is only published from recorded runs. This is an
+ optional component: nothing else in the system imports it at runtime, and
+ bgd treats its absence as "no Windows applications available".
 
 Package: byteguru-installer
 Architecture: all
 Section: admin
-Depends: ${python3:Depends}, ${misc:Depends}, python3 (>= 3.11), partimage | ntfs-3g,
- gdisk, dosfstools, e2fsprogs, btrfs-progs, exfatprogs, efibootmgr, cryptsetup
+Depends:
+ ${misc:Depends},
+ python3 (>= 3.11),
+ python3-gi,
+ gir1.2-gtk-4.0,
+ partimage | ntfs-3g,
+ gdisk, dosfstools, e2fsprogs, btrfs-progs, exfatprogs, efibootmgr,
+ cryptsetup, debootstrap, squashfs-tools
 Description: ByteguruOS installer with dual-boot support
  Disk layout planner working on contiguous free segments, safety gates
- (hibernation, BitLocker, dirty NTFS block changes), EFI boot entry repair
- after Windows updates and a clock policy for machines with both systems.
+ (hibernation, BitLocker, dirty NTFS block the plan), EFI boot entry repair
+ after Windows updates, a clock policy for machines with both systems, and a
+ GTK front-end that runs the plan against a real device with confirmation.
 
 Package: byteguru-data
 Architecture: all
@@ -71,5 +106,5 @@ Section: admin
 Multi-Arch: foreign
 Depends: ${misc:Depends}
 Description: Data files for ByteguruOS
- WCV example manifests, desktop entries, systemd user units, Wayland session
- entry and the shell CSS theme.
+ Desktop entries, the Wayland session entry, systemd user units, the shell CSS
+ themes and the example WCV manifests.

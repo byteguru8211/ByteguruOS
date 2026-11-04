@@ -2,4 +2,7 @@ usr/bin/bgpanel usr/bin
 usr/bin/bglauncher usr/bin
 usr/bin/bgsettings usr/bin
 usr/bin/bgfirstboot usr/bin
+usr/bin/bglock usr/bin
+usr/bin/bgctl usr/bin
+usr/bin/bgwl-session usr/bin
 usr/lib/python3/dist-packages/bgshell usr/lib/python3/dist-packages

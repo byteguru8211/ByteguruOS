@@ -1,50 +1,79 @@
-# ByteguruOS — рабочий стол первого образа.
+# ByteguruOS — рабочий стол.
 #
-# Выбор: Xfce. Причина утилитарная: Xfce + task-* из Debian даёт предсказуемую
-# лёгкую сессию, которая гарантированно стартует в VirtualBox на software-рендере
-# (vboxvideo → modesetting) и не требует 3D-ускорения. Plasma/GNOME оставим на
-# этап после появления нормального установщика.
+# Это СВОЙ стол: композитор bgwl, оболочка bgpanel/bglauncher/bgsettings,
+# локер bglock. Xfce/GNOME в образе нет и быть не должно — иначе пользователь
+# получает чужой рабочий стол с наклейкой ByteguruOS, а наш композитор так и
+# остаётся неиспробованным бинарником.
 #
-# Имя подтверждено: task-xfce-desktop 3.81 присутствует в trixie.
+# Наши .deb лежат в config/packages.chroot/ и ставятся live-build напрямую;
+# зависимости отсюда — то, без чего эти пакеты не работают. Имена имён пакетов
+# сверены с индексом trixie (см. build/scripts/check-package-names.py).
 
-task-xfce-desktop
-
-# --- дисплейный менеджер -------------------------------------------------------
-# lightdm + gtk-greeter: simplest possible autologin-able стек; sddm/plymouth
-# пока не просим.
-lightdm
-lightdm-gtk-greeter
-
-# --- компоненты рабочего стола --------------------------------------------------
-xfce4-terminal
-xfce4-whiskermenu-plugin
+# --- терминал и файловый менеджер ----------------------------------------------
+# foot: Wayland-нативный, лёгкий, без Qt/GTK-зависимостей. Именно его вызывает
+# Super+Enter по умолчанию (bgwl.conf), поэтому он обязателен в образе.
+foot
+foot-terminfo
 thunar
-thunar-volman
-thunar-archive-plugin
-mousepad
-xfce4-power-manager
-xfce4-screenshooter
-gnome-disk-utility
-# gnome-disk-utility (Disks) — GUI над udisks2; нужен, чтобы пользователь видел,
-# что NTFS монтируется только для чтения (политика в etc/udev + etc/udisks2).
 
-# --- сеть/Bluetooth GUI ---------------------------------------------------------
-network-manager-gnome
-nm-connection-editor
-bluez
-blueman
-
-# --- утилиты, без которых live-образ выглядит «голым» ---------------------------
+# --- то, что оболочка читает руками -------------------------------------------
 xdg-utils
 desktop-file-utils
 hicolor-icon-theme
-# policykit-1 в trixie больше нет: его заменили polkitd + pkexec (проверено по
-# индексу dists/trixie/main|contrib|non-free*/binary-amd64). Утилитам оболочки
-# нужен именно pkexec для polkit-запросов, а сам агент — polkitd.
+adwaita-icon-theme
+shared-mime-info
+gsettings-desktop-schemas
+dconf-gsettings-backend
+xdg-user-dirs
+
+# --- шрифты: кириллица в UI и в консоли -----------------------------------------
+fonts-dejavu-core
+fonts-liberation
+
+# --- снимки экрана --------------------------------------------------------------
+# Панель и bgwl считают, что захват делает grim (+ slurp для выделения области).
+# Протокол screencopy композитор отдаёт, но без клиента «PrtSc» — мёртвая клавиша.
+grim
+slurp
+
+# --- буфер обмена ---------------------------------------------------------------
+wl-clipboard
+
+# --- сессия и права -------------------------------------------------------------
+# polkitd + pkexec вместо policykit-1 (в trixie его нет). Нужны установщику для
+# привилегированных шагов и fusesync-агенту в live-сессии.
 polkitd
 pkexec
+dbus
+dbus-user-session
 
-# --- TODO-VERIFY (проверить на реальном mirror перед первым релизом) -----------
-# fonts-noto-cjk        — широкая типографика; скорее всего есть, но не проверял.
-# plymouth              — графический сплэш; с live-boot работает криво, отложили.
-# xfonts-cyrillic       — в trixie может быть заменён на fonts-* ; не включаем.
+# --- порталы --------------------------------------------------------------------
+# Без portal-бэкенда xdg-desktop-portal не поднимается: отсюда пустые диалоги
+# выбора файла у Flatpak-приложений и неработающий захват экрана.
+xdg-desktop-portal
+xdg-desktop-portal-gtk
+
+# --- звук и питание -------------------------------------------------------------
+pipewire
+pipewire-pulse
+wireplumber
+power-profiles-daemon
+upower
+
+# --- сеть -----------------------------------------------------------------------
+network-manager
+iproute2
+wireless-tools
+
+# --- приложения из песочницы ----------------------------------------------------
+flatpak
+
+# --- уведомления (для проверки bgnote и для сторонних клиентов) ----------------
+libnotify-bin
+
+# --- чего здесь СОЗНАТЕЛЬНО нет -------------------------------------------------
+# task-xfce-desktop, lightdm, sddm, gnome-shell, plasma-workspace: чужие столы.
+# xorg: XWayland появится позже как опция; сам X-сервер в образе не нужен.
+# bluez/blueman: Bluetooth отложен до момента, когда у оболочки появится
+#   соответствующая панель — сейчас это мёртвая иконка.
+# calamares: установщик свой (byteguru-installer), см. docs/ARCHITECTURE.md.

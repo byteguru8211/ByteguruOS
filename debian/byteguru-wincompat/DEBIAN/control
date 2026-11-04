@@ -1,0 +1,15 @@
+Package: byteguru-wincompat
+Source: byteguru
+Version: 1.0.0-1
+Architecture: all
+Maintainer: ByteguruOS Team <devel@byteguru.example>
+Installed-Size: 122
+Depends: python3 (>= 3.11), apparmor, apparmor-utils, wine64 | wine, winetricks, ca-certificates
+Section: admin
+Priority: optional
+Description: WinCompat subsystem for running Windows applications
+ WCV manifest validation, per-application prefixes with rollback, drive letter
+ and path visibility filter, AppArmor/seccomp policy generation, coverage
+ registry where a level is only published from recorded runs. This is an
+ optional component: nothing else in the system imports it at runtime, and
+ bgd treats its absence as "no Windows applications available".

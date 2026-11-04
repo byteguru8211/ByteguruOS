@@ -1,0 +1,8 @@
+debian/tmp/usr/bin/bgpanel
+debian/tmp/usr/bin/bglauncher
+debian/tmp/usr/bin/bgsettings
+debian/tmp/usr/bin/bgfirstboot
+debian/tmp/usr/bin/bglock
+debian/tmp/usr/bin/bgctl
+debian/tmp/usr/bin/bgwl-session
+debian/tmp/usr/lib/python3/dist-packages/bgshell

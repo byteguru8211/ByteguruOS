@@ -1,0 +1,16 @@
+Package: byteguru-shell
+Source: byteguru
+Version: 1.0.0-1
+Architecture: all
+Maintainer: ByteguruOS Team <devel@byteguru.example>
+Installed-Size: 186
+Depends: python3 (>= 3.11), python3-gi, gir1.2-gtk-4.0, gir1.2-adw-1.0, gir1.2-gtk4layershell-1.0, libgtk4-layer-shell0, gsettings-desktop-schemas, adwaita-icon-theme, fonts-dejavu, byteguru-data, byteguru-apps-daemon, byteguru-compositor
+Recommends: network-manager, upower, pipewire, power-profiles-daemon, xdg-desktop-portal, xdg-desktop-portal-gtk, thunar, foot
+Section: x11
+Priority: optional
+Description: ByteguruOS desktop shell
+ Panel (streams, window list, machine indicators, quick settings), application
+ launcher, settings window, first-run wizard, lock screen, session entry
+ (bgwl-session) and bgctl. The state model is separated from the widgets and
+ unit-tested; the widgets read the compositor over its control socket instead
+ of keeping a second copy of the truth.

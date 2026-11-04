@@ -182,6 +182,13 @@ static void layer_surface_handle_map(struct wl_listener *listener, void *data) {
 	struct bgwl_layer_surface *ls = wl_container_of(listener, ls, map);
 	struct bgwl_server *server = ls->server;
 
+	if (ls->is_lock) {
+		server->lock_surface = ls;
+		wlr_log(WLR_INFO, "lock surface mapped in layer %d",
+			(int)ls->layer_surface->current.layer);
+		return;
+	}
+
 	if (!ls->is_panel) {
 		return;
 	}
@@ -197,6 +204,18 @@ static void layer_surface_handle_map(struct wl_listener *listener, void *data) {
 static void layer_surface_handle_unmap(struct wl_listener *listener, void *data) {
 	struct bgwl_layer_surface *ls =
 		wl_container_of(listener, ls, unmap);
+
+	/* Локер исчез — разблокируем, иначе пользователь остаётся с чёрным
+	 * экраном и мёртвым процессом. */
+	if (ls->is_lock) {
+		if (ls->server->lock_surface == ls) {
+			ls->server->lock_surface = NULL;
+		}
+		if (ls->server->locked &&
+				!bgwl_session_ext_lock_active(ls->server)) {
+			bgwl_server_set_locked(ls->server, false);
+		}
+	}
 
 	wl_list_remove(&ls->link);
 	wl_list_init(&ls->link);
@@ -287,6 +306,9 @@ void bgwl_new_layer_surface(struct wl_listener *listener, void *data) {
 	ls->is_panel = namespace != NULL &&
 		strncmp(namespace, BGWL_PANEL_NAMESPACE_PREFIX,
 			strlen(BGWL_PANEL_NAMESPACE_PREFIX)) == 0;
+	ls->is_lock = namespace != NULL &&
+		strncmp(namespace, BGWL_LOCK_NAMESPACE_PREFIX,
+			strlen(BGWL_LOCK_NAMESPACE_PREFIX)) == 0;
 
 	struct wlr_scene_tree *parent =
 		server->trees[tree_index_for_layer(layer_surface->pending.layer)];

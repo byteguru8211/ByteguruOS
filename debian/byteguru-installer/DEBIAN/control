@@ -1,0 +1,14 @@
+Package: byteguru-installer
+Source: byteguru
+Version: 1.0.0-1
+Architecture: all
+Maintainer: ByteguruOS Team <devel@byteguru.example>
+Installed-Size: 91
+Depends: python3 (>= 3.11), python3-gi, gir1.2-gtk-4.0, partimage | ntfs-3g, gdisk, dosfstools, e2fsprogs, btrfs-progs, exfatprogs, efibootmgr, cryptsetup, debootstrap, squashfs-tools
+Section: admin
+Priority: optional
+Description: ByteguruOS installer with dual-boot support
+ Disk layout planner working on contiguous free segments, safety gates
+ (hibernation, BitLocker, dirty NTFS block the plan), EFI boot entry repair
+ after Windows updates, a clock policy for machines with both systems, and a
+ GTK front-end that runs the plan against a real device with confirmation.

@@ -1,0 +1,8 @@
+byteguru-apps-daemon_1.0.0-1_all.deb admin optional
+byteguru-compositor-dbgsym_1.0.0-1_amd64.deb debug optional automatic=yes
+byteguru-compositor_1.0.0-1_amd64.deb admin optional
+byteguru-data_1.0.0-1_all.deb admin optional
+byteguru-installer_1.0.0-1_all.deb admin optional
+byteguru-shell_1.0.0-1_all.deb x11 optional
+byteguru-wincompat_1.0.0-1_all.deb admin optional
+byteguru_1.0.0-1_amd64.buildinfo admin optional

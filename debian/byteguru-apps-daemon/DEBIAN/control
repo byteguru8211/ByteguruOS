@@ -1,0 +1,15 @@
+Package: byteguru-apps-daemon
+Source: byteguru
+Version: 1.0.0-1
+Architecture: all
+Maintainer: ByteguruOS Team <devel@byteguru.example>
+Installed-Size: 47
+Depends: python3 (>= 3.11)
+Recommends: flatpak, byteguru-wincompat
+Section: admin
+Priority: optional
+Description: ByteguruOS session daemon with a unified application model
+ Presents Flatpak apps, .desktop entries and WCV manifests as one list and
+ returns an executable launch plan, including coverage level and sandbox
+ warnings. WinCompat is an optional dependency: with it removed the system
+ loses the ability to run Windows applications and stays a complete desktop.

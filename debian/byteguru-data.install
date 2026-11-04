@@ -1,5 +1,4 @@
 usr/share/byteguru/wincompat usr/share/byteguru
-usr/share/byteguru/theme usr/share/byteguru
 usr/share/applications usr/share
 usr/share/wayland-sessions usr/share
 usr/lib/systemd/user usr/lib/systemd

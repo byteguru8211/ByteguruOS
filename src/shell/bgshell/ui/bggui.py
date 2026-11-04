@@ -83,6 +83,12 @@ def load_theme(manager: object, theme_name: str) -> None:
     пишется из настройки accent и должен иметь последнее слово, иначе выбранный
     пользователем акцент перекрывается статическим CSS темы.
     """
+    display = Gdk.Display.get_default()
+    if display is None:
+        # Нет дисплея — нет и StyleContext: в этом состоянии работают только
+        # headless-проверки логики, и падать с Gtk-CRITICAL им незачем.
+        return
+
     css_file = THEME_DIR / f"{theme_name}.css"
     if not css_file.is_file():
         css_file = THEME_DIR / "base.css"
@@ -92,20 +98,22 @@ def load_theme(manager: object, theme_name: str) -> None:
     provider = Gtk.CssProvider.new()
     provider.load_from_path(str(css_file))
     Gtk.StyleContext.add_provider_for_display(
-        Gdk.Display.get_default(),
-        provider,
-        Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION,
-    )
+        display, provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+
+    # Тёмный режим просим у самого Adwaita, а не только своей CSS: иначе
+    # стандартные виджеты (меню, диалоги, переключатели) остаются светлыми
+    # посреди тёмного стола, и это видно в первом же окне настроек.
+    settings = Gtk.Settings.get_default()
+    if settings is not None:
+        settings.set_property("gtk-application-prefer-dark-theme",
+            "dark" in theme_name)
 
     generated = themes.THEME_CSS
     if generated.is_file():
         palette_provider = Gtk.CssProvider.new()
         palette_provider.load_from_path(str(generated))
         Gtk.StyleContext.add_provider_for_display(
-            Gdk.Display.get_default(),
-            palette_provider,
-            Gtk.STYLE_PROVIDER_PRIORITY_SETTINGS,
-        )
+            display, palette_provider, Gtk.STYLE_PROVIDER_PRIORITY_SETTINGS)
 
 
 def build_window(application, title: str):

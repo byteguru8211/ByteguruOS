@@ -1,0 +1,20 @@
+#!/bin/sh
+# Точка входа сервера уведомлений (устанавливается как /usr/bin/bgnote).
+
+# Обёртка на shell нужна по одной причине: gtk4-layer-shell обязан быть
+# пред-загружен, а GDK — выбрать wayland до первой инициализации дисплея.
+if [ -n "${WAYLAND_DISPLAY:-}" ]; then
+	for candidate in \
+		/usr/lib/x86_64-linux-gnu/libgtk4-layer-shell.so.0 \
+		/usr/lib/libgtk4-layer-shell.so.0 \
+		/usr/lib64/libgtk4-layer-shell.so.0
+	do
+		if [ -f "$candidate" ]; then
+			export LD_PRELOAD="$candidate${LD_PRELOAD:+:$LD_PRELOAD}"
+			break
+		fi
+	done
+	export GDK_BACKEND=wayland
+fi
+
+exec python3 -m bgshell.ui.notifications "$@"

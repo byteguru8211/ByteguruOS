@@ -1,0 +1,56 @@
+Format: 1.8
+Date: Thu, 05 Nov 2026 01:40:00 +0300
+Source: byteguru
+Binary: byteguru-apps-daemon byteguru-compositor byteguru-compositor-dbgsym byteguru-data byteguru-installer byteguru-shell byteguru-wincompat
+Architecture: all amd64
+Version: 1.0.0-1
+Distribution: unstable
+Urgency: medium
+Maintainer: ByteguruOS Team <devel@byteguru.example>
+Changed-By: ByteguruOS Team <devel@byteguru.example>
+Description:
+ byteguru-apps-daemon - ByteguruOS session daemon with a unified application model
+ byteguru-compositor - Wayland compositor for ByteguruOS (bgwl)
+ byteguru-data - Data files for ByteguruOS
+ byteguru-installer - ByteguruOS installer with dual-boot support
+ byteguru-shell - ByteguruOS desktop shell
+ byteguru-wincompat - WinCompat subsystem for running Windows applications
+Changes:
+ byteguru (1.0.0-1) unstable; urgency=medium
+ .
+   * Композитор bgwl собран, запущен и покрыт тестами: потоки, тайлинг,
+     эксклюзивные зоны панели, ~25 protocol globals, session lock, idle,
+     крышка ноутбука, управляющий сокет.
+   * Оболочка: панель на layer-shell (реально работает в сеансе), bgctl,
+     экран блокировки bglock, точка входа сеанса bgwl-session.
+   * Пакетирование проверено dpkg-buildpackage на Debian 13: правила больше
+     не притворяются buildsystem=none, зависимости python-пакетов описаны
+     явно, WinCompat вынесен в опциональную рекомендацию.
+   * WinCompat больше не в обязательном пути: система полная и без него.
+Checksums-Sha1:
+ e3bb55b40f7d6ddd9b151b419ac0d46b8497d7a2 11136 byteguru-apps-daemon_1.0.0-1_all.deb
+ 41221a70a7f9484b73516f4007546c793397a67e 164456 byteguru-compositor-dbgsym_1.0.0-1_amd64.deb
+ f118f41c5b9187a427f3cff244db637cd4c8161a 48628 byteguru-compositor_1.0.0-1_amd64.deb
+ 8f3993e20a625e42c1a3421844db25910d28be9c 5448 byteguru-data_1.0.0-1_all.deb
+ 2697437ce9733f92fc994ef913810816166201bc 21736 byteguru-installer_1.0.0-1_all.deb
+ c1c689f2280680c7d3a6f035e73bbb61ed208a4e 41076 byteguru-shell_1.0.0-1_all.deb
+ 351e643de794d6869337f82aefed6c3851a0552c 27224 byteguru-wincompat_1.0.0-1_all.deb
+ ebb2ef0c424b20cafd861ef13a0da0e4a62ee0de 12883 byteguru_1.0.0-1_amd64.buildinfo
+Checksums-Sha256:
+ 49229e0094d02551e34c4daf75e9b6588a6229081b8efea28b04c12b17d3aff4 11136 byteguru-apps-daemon_1.0.0-1_all.deb
+ 02ef88cee22a67e8cfff4245a5b143886070c1962c81d35ed24d33be6b1fd143 164456 byteguru-compositor-dbgsym_1.0.0-1_amd64.deb
+ f6b26667e5bf26a0ed476a61207da7d08cbd60865d5ac2ec34af1d91bc08ce08 48628 byteguru-compositor_1.0.0-1_amd64.deb
+ ea25e55c63fb6f4e86a475e565fa6ce16d0cb877909b0041e32c33b28756c31d 5448 byteguru-data_1.0.0-1_all.deb
+ d91c9951ba94c8fb1300235f06df015035485f0277fdb37fa7d808f221a9b451 21736 byteguru-installer_1.0.0-1_all.deb
+ 877f16f28150d215999e20b757d320cbcaaf2bd747d516b070799144d580b7c1 41076 byteguru-shell_1.0.0-1_all.deb
+ 6e13ebc841bd5ca14df5ac3d78777dcba6425967ae4d1cd05eff83b3b8bb3bc8 27224 byteguru-wincompat_1.0.0-1_all.deb
+ 2250bc28f1a924c5204a8e7e02e0e95f6e9287844f42405c2243e854fc059bb3 12883 byteguru_1.0.0-1_amd64.buildinfo
+Files:
+ 60ce02e1ae1981808f5181aae73fc0be 11136 admin optional byteguru-apps-daemon_1.0.0-1_all.deb
+ f999b9b6ae6ab178cdd77b49d1bd7623 164456 debug optional byteguru-compositor-dbgsym_1.0.0-1_amd64.deb
+ 6c426f7fbdd9006915c02037235014a6 48628 admin optional byteguru-compositor_1.0.0-1_amd64.deb
+ 4b39bab8f34b3d8da8d18feb7497c243 5448 admin optional byteguru-data_1.0.0-1_all.deb
+ 7784e63516bf8772181a69a85e8b1973 21736 admin optional byteguru-installer_1.0.0-1_all.deb
+ c913039cdbeedb5f0f8a051f6523e1ce 41076 x11 optional byteguru-shell_1.0.0-1_all.deb
+ 9a088ea33ec3dcaac476b2f808d14808 27224 admin optional byteguru-wincompat_1.0.0-1_all.deb
+ f03e2381c03380ac0fb71cdd492448c8 12883 admin optional byteguru_1.0.0-1_amd64.buildinfo

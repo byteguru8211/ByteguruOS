@@ -91,6 +91,12 @@ bool bgwl_server_is_locked(struct bgwl_server *server) {
 	return server->locked;
 }
 
+bool bgwl_session_ext_lock_active(struct bgwl_server *server) {
+	return server->session != NULL && server->session->lock != NULL;
+}
+
+
+
 /* Everything that must stop being visible or reachable while the session is
  * locked. The overlay tree stays: a lock screen may need an input-method
  * surface, and an IME popup has no business showing the desktop. */
@@ -100,6 +106,34 @@ static void set_desktop_visible(struct bgwl_server *server, bool visible) {
 			wlr_scene_node_set_enabled(&server->trees[i]->node, visible);
 		}
 	}
+}
+
+/* Единственная функция, меняющая «экран заблокирован». Её вызывают и
+ * ext-session-lock-клиент (new_lock/unlock), и собственный локер оболочки
+ * через управляющий сокет: два пути, но одно состояние — иначе один из них
+ * мог бы разблокировать то, что закрыл другой. */
+void bgwl_server_set_locked(struct bgwl_server *server, bool locked) {
+	if (server->locked == locked) {
+		return;
+	}
+	server->locked = locked;
+	set_desktop_visible(server, !locked);
+
+	if (locked) {
+		/* Клавиатура блокируется на уровне seat: пока локер не попросил
+		 * фокус сам, ни одно окно не получает событий. */
+		wlr_seat_keyboard_clear_focus(server->seat);
+		wlr_log(WLR_INFO, "session locked by the lock surface");
+		bgwl_ctl_broadcast(server, "locked");
+		return;
+	}
+	wlr_log(WLR_INFO, "session unlocked");
+	struct bgwl_toplevel *focused = bgwl_workspace_first_toplevel(
+		server->active_ws);
+	if (focused != NULL) {
+		bgwl_toplevel_focus(focused);
+	}
+	bgwl_ctl_broadcast(server, "unlocked");
 }
 
 static bool any_idle_inhibitor_visible(struct bgwl_session *session) {

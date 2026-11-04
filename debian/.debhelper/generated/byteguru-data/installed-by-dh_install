@@ -1,0 +1,4 @@
+debian/tmp/usr/share/byteguru/wincompat
+debian/tmp/usr/share/applications
+debian/tmp/usr/share/wayland-sessions
+debian/tmp/usr/lib/systemd/user

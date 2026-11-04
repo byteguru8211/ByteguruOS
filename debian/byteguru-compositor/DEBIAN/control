@@ -1,0 +1,16 @@
+Package: byteguru-compositor
+Source: byteguru
+Version: 1.0.0-1
+Architecture: amd64
+Maintainer: ByteguruOS Team <devel@byteguru.example>
+Installed-Size: 152
+Depends: libc6 (>= 2.38), libcairo2 (>= 1.2.4), libwayland-server0 (>= 1.14.91), libwlroots-0.18 (>= 0.18.0), libxkbcommon0 (>= 0.5.0), xkb-data, wl-clipboard, grim, slurp
+Section: admin
+Priority: optional
+Description: Wayland compositor for ByteguruOS (bgwl)
+ wlroots-based session compositor: streams (workspaces) with per-stream
+ accents, tile/even/floating layouts, real maximise and fullscreen,
+ server-side titlebars with buttons, exclusive zones for the panel,
+ ext-session-lock and idle handling, laptop lid, screencopy and the rest of
+ the protocol set the portals and sandboxed apps need, plus a JSON control
+ socket used by the shell and by bgctl.

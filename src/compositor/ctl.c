@@ -651,7 +651,21 @@ void bgwl_ctl_handle_command(struct bgwl_server *server,
 		bgwl_reflow(server);
 		changed = true;
 	} else if (strcmp(verb, "lock") == 0) {
-		bgwl_run_action(server, server->cfg.lock_command);
+		/* "lock" запускает локер; сам локер говорит "lock begin", когда готов
+		 * закрыть экран, и "lock end" после успешной аутентификации. */
+		char *arg = strtok_r(NULL, " \t", &save);
+		if (arg != NULL && strcmp(arg, "begin") == 0) {
+			bgwl_server_set_locked(server, true);
+		} else if (arg != NULL && strcmp(arg, "end") == 0) {
+			if (bgwl_session_ext_lock_active(server)) {
+				reply(client, "{\"type\":\"error\",\"error\":"
+					"\"ext-session-lock owns the screen\"}\n");
+				return;
+			}
+			bgwl_server_set_locked(server, false);
+		} else {
+			bgwl_run_action(server, server->cfg.lock_command);
+		}
 	} else if (strcmp(verb, "run") == 0) {
 		char *rest = strtok_r(NULL, "\n", &save);
 		if (rest != NULL) {

@@ -1,0 +1,11 @@
+a660996e66dfe87c1beac4244043b7bf  usr/lib/systemd/user/byteguru-apps.service
+482cc1e5510c88b0ab91d5e1abfe0640  usr/share/applications/bgfirstboot.desktop
+323a201e433c973d0bb6325ac6e27f64  usr/share/applications/bglauncher.desktop
+ee97e86f80d60d64bbc09b036819fad3  usr/share/applications/bgsettings.desktop
+9ca1f84b74e397c65acfb0e56a2fe63e  usr/share/byteguru/wincompat/1c-client-83.wcv
+8dec5757f7fe884a6b6a33bbbbcb9362  usr/share/byteguru/wincompat/cad-legacy-2007.wcv
+642ff031dd29249393afdf6e663ca169  usr/share/byteguru/wincompat/doc-viewer-l2.wcv
+a8a504625797ea62086bb453f7f8c055  usr/share/byteguru/wincompat/notepad-plus.wcv
+2abacc9e2b6191a9ed7cab028a43ab1b  usr/share/doc/byteguru-data/changelog.Debian.gz
+ef05f5c525b7c95aebb7b80e6dc0b39a  usr/share/doc/byteguru-data/copyright
+59b9a2052d39fa9d0b2bfe04893b8867  usr/share/wayland-sessions/bgwl.desktop

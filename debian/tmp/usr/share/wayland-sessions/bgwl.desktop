@@ -1,0 +1,8 @@
+[Desktop Entry]
+Name=ByteguruOS
+Comment=Сеанс ByteguruOS на композиторе bgwl
+Exec=/usr/bin/bgwl-session
+TryExec=/usr/bin/bgwl-session
+Type=Application
+DesktopNames=ByteguruOS
+Keywords=wayland;bgwl;byteguru;

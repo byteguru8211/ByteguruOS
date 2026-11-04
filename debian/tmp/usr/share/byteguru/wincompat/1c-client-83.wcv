@@ -1,0 +1,57 @@
+[wcv]
+schema = 1
+id = "1c-client-83"
+name = "1С:Предприятие 8.3 (клиент)"
+version = "8.3.24.145"
+publisher = "1C"
+executable = "1cv8.exe"
+runner = "wine"
+expected_level = "l1"
+wine = "9.0"
+tested = false
+comments = "Типовой корпоративный сценарий. Перед публикацией в реестре обязателен прогон на целевых сборках."
+
+[graph]
+path = "dxvk"
+
+[drives]
+mappings = [
+  { letter = "C", kind = "prefix", mode = "rw" },
+  { letter = "Z", kind = "bind", path = "/srv/1c-base", mode = "rw" },
+]
+
+[network]
+mode = "allowlist"
+domains = ["license.v8.1c.ru", "server.local"]
+
+[[network.ports]]
+proto = "tcp"
+port = 445
+
+[[network.ports]]
+proto = "tcp"
+port = 1540
+
+[devices]
+audio = true
+camera = false
+printers = "queue-only"
+
+[[devices.usb]]
+vendor = "04e6"
+product = "5203"
+description = "USB-ключ аутентификации"
+
+[filesystem]
+visible = ["/home/%USER%/.1c", "/srv/1c-base"]
+
+[security]
+apparmor = "enforce"
+seccomp = "strict"
+
+[integration]
+menu = true
+mime = ["application/x-1c-erf"]
+
+[update]
+policy = "manual"

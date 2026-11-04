@@ -121,27 +121,35 @@ static void handle_info_args(int argc, char **argv, const char *argv0) {
 
 /* --- backend selection -------------------------------------------------- */
 
-struct bgwl_drm_probe {
+struct bgwl_backend_probe {
 	bool has_drm;
+	bool has_headless;
 };
 
 static void probe_backend(struct wlr_backend *backend, void *data) {
-	struct bgwl_drm_probe *probe = data;
+	struct bgwl_backend_probe *probe = data;
 	if (wlr_backend_is_drm(backend)) {
 		probe->has_drm = true;
 	}
+	if (wlr_backend_is_headless(backend)) {
+		probe->has_headless = true;
+	}
 }
 
-static bool has_drm_backend(struct wlr_backend *backend) {
+static struct bgwl_backend_probe probe_backends(struct wlr_backend *backend) {
+	struct bgwl_backend_probe probe = { .has_drm = false, .has_headless = false };
 	if (wlr_backend_is_drm(backend)) {
-		return true;
+		probe.has_drm = true;
+		return probe;
 	}
-	if (!wlr_backend_is_multi(backend)) {
-		return false;
+	if (wlr_backend_is_headless(backend)) {
+		probe.has_headless = true;
+		return probe;
 	}
-	struct bgwl_drm_probe probe = { .has_drm = false };
-	wlr_multi_for_each_backend(backend, probe_backend, &probe);
-	return probe.has_drm;
+	if (wlr_backend_is_multi(backend)) {
+		wlr_multi_for_each_backend(backend, probe_backend, &probe);
+	}
+	return probe;
 }
 
 /* Headless backend wrapped in a multi-backend, with one output so that a
@@ -197,9 +205,13 @@ static struct wlr_backend *select_backend(struct bgwl_server *server,
 		return create_headless_fallback(server, loop);
 	}
 
-	if (!has_drm_backend(backend)) {
+	/* WLR_BACKENDS=headless уже дал нам headless-бэкенд с выводом. Второй
+	 * вывод отсюда — это «рабочий стол на два экрана» в CI и на скриншотах,
+	 * поэтому добавляем запасной вывод только когда нет ни DRM, ни headless. */
+	struct bgwl_backend_probe found = probe_backends(backend);
+	if (!found.has_drm && !found.has_headless) {
 		wlr_log(WLR_INFO,
-			"no DRM device in the auto-created backend; adding a headless "
+			"no DRM or headless backend available; adding a headless "
 			"output so the session is still usable");
 		struct wlr_backend *headless = wlr_headless_backend_create(loop);
 		if (headless != NULL) {

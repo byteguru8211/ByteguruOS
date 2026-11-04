@@ -1,0 +1,20 @@
+[Unit]
+Description=ByteguruOS — демон единой модели приложений
+Documentation=man:bgd(1)
+After=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/bgd serve
+Restart=on-failure
+RestartSec=2
+# Демон не имеет права становиться привилегированным: он только читает
+# манифесты и реестр и отдаёт планы запуска сеансу пользователя.
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%t/byteguru
+
+[Install]
+WantedBy=graphical-session.target

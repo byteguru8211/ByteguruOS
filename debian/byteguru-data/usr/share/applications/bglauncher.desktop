@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Программы
+Name[en]=Applications
+GenericName=Лаунчер приложений
+Exec=bglauncher
+Icon=system-search
+Terminal=false
+Categories=Unity;GTK;Security;
+StartupWMClass=bglauncher
+Keywords=приложения;программы;поиск;windows;
