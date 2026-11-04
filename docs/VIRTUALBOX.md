@@ -68,7 +68,7 @@ lsmod | grep -E 'vboxguest|vboxsf|vboxvideo'
 
 ## 2.1 Вход в live-сессию
 
-**Образ из прогона, где есть хук `0200-byteguru-live-user.chroot` (run10 и
+**Образ из прогона, где есть хук `0200-byteguru-live-user.chroot` (run11 и
 новее), входит сам** — ничего вводить не нужно. Если запрос всё-таки появился:
 
 | Логин | Пароль |
@@ -80,7 +80,7 @@ lsmod | grep -E 'vboxguest|vboxsf|vboxvideo'
 секрет: содержимое live-носителя читает любой, кто с него загрузился, поэтому
 устанавливаемая система задаёт собственный пароль (см. `INSTALL.txt` в образе).
 
-Что сделано для этого в сборке ([хук](../build/live/config/hooks/0200-byteguru-live-user.chroot)):
+Что сделано для этого в сборке ([хук](../build/live/config/hooks/normal/0200-byteguru-live-user.chroot)):
 
 - создаётся `user` с shell'ом `/bin/bash` — иначе `pam_succeed_if.so` из
   `/etc/pam.d/lightdm-autologin` отсекает учётную запись, и автологин не работает;

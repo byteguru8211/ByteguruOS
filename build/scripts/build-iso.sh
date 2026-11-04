@@ -258,8 +258,12 @@ sync_overlay() {
 	# требует исполняемости auto/config и hooks/*: без этого стадия молча не
 	# запускается. Права выставляем здесь, а не в CI-шаге.
 	chmod 0755 "${LIVE_DIR}/auto/config" 2>/dev/null || true
+	# live-build (trixie: 20250505) ищет хуки в config/hooks/normal/*.chroot, а не
+	# в config/hooks/ —Flat-раскладка молча игнорируется. Обход по всему дереву,
+	# чтобы хук не потерялся при следующем переезде формата.
 	if [ -d "${LIVE_DIR}/config/hooks" ]; then
-		find "${LIVE_DIR}/config/hooks" -maxdepth 1 -type f -exec chmod 0755 {} + 2>/dev/null || true
+		find "${LIVE_DIR}/config/hooks" -type f -name '*.chroot' -exec chmod 0755 {} + 2>/dev/null || true
+		find "${LIVE_DIR}/config/hooks" -type f -name '*.binary' -exec chmod 0755 {} + 2>/dev/null || true
 	fi
 	if [ -d "${INCLUDES_DIR}/usr/local" ]; then
 		find "${INCLUDES_DIR}/usr/local" -type f -exec chmod 0755 {} + 2>/dev/null || true

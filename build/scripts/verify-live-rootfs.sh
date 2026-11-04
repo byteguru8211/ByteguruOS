@@ -59,6 +59,14 @@ for conf in \
 	fi
 done
 
+# Локализация: из-за неверного расположения хуков live-build молча их не
+# исполнял, и это единственный способ заметить такое до загрузки в VirtualBox.
+if grep -q 'ru_RU' "${CHROOT}/etc/default/locale" 2>/dev/null; then
+	note "- локаль: ru_RU в /etc/default/locale (хук 0100 отработал)"
+else
+	note "- локаль: **ru_RU в /etc/default/locale не найдена** — хук 0100 не отработал"
+fi
+
 SESSIONS="$(ls "${CHROOT}/usr/share/xsessions" "${CHROOT}/usr/share/wayland-sessions" 2>/dev/null | tr '\n' ' ')"
 note "- доступные сессии: ${SESSIONS:-**нет ни одной**}"
 [ -n "${SESSIONS}" ] || fail "в образе нет ни xsessions, ни wayland-sessions"

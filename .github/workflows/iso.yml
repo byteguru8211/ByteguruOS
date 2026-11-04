@@ -262,7 +262,7 @@ jobs:
           files="$(git ls-files -z \
             'build/scripts/*.sh' \
             'build/live/auto/config' \
-            'build/live/config/hooks/*' \
+            'build/live/config/hooks/normal/*' \
             'iso/overlay/usr/local/sbin/*' \
             'iso/overlay/usr/local/bin/*' | tr '\0' '\n')"
           if [ -z "${files}" ]; then
@@ -289,7 +289,7 @@ jobs:
           files="$(git ls-files -z \
             'build/scripts/*.sh' \
             'build/live/auto/config' \
-            'build/live/config/hooks/*' \
+            'build/live/config/hooks/normal/*' \
             'iso/overlay/usr/local/sbin/*' \
             'iso/overlay/usr/local/bin/*' | tr '\0' '\n')"
           rc=0
