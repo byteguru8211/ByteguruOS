@@ -26,18 +26,20 @@ echo "хук live-user: создаём пользователя '${LIVE_USER}'" 
 
 # --- пользователь live-сессии ---------------------------------------------------
 if ! id "${LIVE_USER}" >/dev/null 2>&1; then
-	# Группы существуют в Debian по умолчанию; несуществующую группу useradd
-	# отверг бы всей командой, поэтому проверяем каждую и собираем список.
-	GROUPS=""
+	# Имя не GROUPS: в bash это встроенный массив с GID'ами пользователя, и
+	# присваивание ему строки справедливо ругается (SC2178/SC2128). В POSIX sh
+	# такой переменной нет и код работал, но имя сбивало с толку и линтер, и
+	# читателя — оставляем LIVE_GROUPS.
+	LIVE_GROUPS=""
 	for g in cdrom floppy audio video netdev plugdev sudo; do
 		if getent group "${g}" >/dev/null 2>&1; then
-			GROUPS="${GROUPS:+${GROUPS},}${g}"
+			LIVE_GROUPS="${LIVE_GROUPS:+${LIVE_GROUPS},}${g}"
 		fi
 	done
 	# Кавычки внутри ${VAR:+...} в POSIX sh не работают как кавычки: строка
 	# передалась бы useradd с литеральными " — поэтому две отдельные ветки.
-	if [ -n "${GROUPS}" ]; then
-		useradd -m -s /bin/bash -G "${GROUPS}" "${LIVE_USER}"
+	if [ -n "${LIVE_GROUPS}" ]; then
+		useradd -m -s /bin/bash -G "${LIVE_GROUPS}" "${LIVE_USER}"
 	else
 		echo "ХУК: ни одной известной группы не найдено, создаём без -G" >&2
 		useradd -m -s /bin/bash "${LIVE_USER}"
