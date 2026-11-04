@@ -1,0 +1,294 @@
+"""Тесты десктопного слоя оболочки: палитра, системные индикаторы, клиент композитора.
+
+Здесь нет GTK по той же причине, по какой он не нужен в bgshell.panel: проверяется
+логика, а не отрисовка. Исключение — Compositor: он говорит по настоящему unix-
+сокету, поэтому в тесте поднимается фейковый композитор на той же схеме «строка
+команды → строка JSON».
+"""
+
+import json
+import os
+import socket
+import sys
+import threading
+from pathlib import Path
+
+import pytest
+
+sys.path[:0] = [str(Path(__file__).resolve().parent.parent / p) for p in
+    ("src/shell", "src/bytegurud", "src/installer", "src/wincompat")]
+
+from bgshell import systeminfo, themes  # noqa: E402
+from bgshell.ctl import Compositor, Snapshot, socket_path  # noqa: E402
+
+
+# ------------------------------------------------------------------- палитра
+def test_palette_derives_contrast_text():
+    dark_accent = themes.Palette(accent="#1b3f8f", dark=True)   # тёмный синий
+    bright_accent = themes.Palette(accent="#00ff88", dark=True)  # ядовитый зелёный
+    # Текст на акценте выбирается по яркости подложки, а не «белый всегда».
+    assert dark_accent.accent_fg == "#ffffff"
+    assert bright_accent.accent_fg == "#101010"
+
+
+def test_palette_rejects_malformed_accent():
+    with pytest.raises(ValueError):
+        themes.with_accent(themes.Palette(), "green")
+    with pytest.raises(ValueError):
+        themes.with_accent(themes.Palette(), "#12345")
+
+
+def test_palette_css_contains_the_named_colors_the_shell_uses():
+    css = themes.Palette(accent="#4a9eff").css()
+    for marker in ("@define-color accent_bg_color #4a9eff;",
+            ".bg-panel", ".bg-pill-active", "@define-color window_bg_color"):
+        assert marker in css
+
+
+def test_write_compositor_conf_round_trips_into_bgwl_parser(tmp_path):
+    """Конфиг, который пишет оболочка, должен читать композитор.
+
+    Это единственная проверка совместности двух реализаций формата без запуска
+    C-бинарника: строки те же, что разбирает apply_config_line в util.c.
+    """
+    palette = themes.Palette(accent="#3ecf8e", dark=True)
+    path = tmp_path / "bgwl.conf"
+    themes.write_compositor_conf(palette, [(0, "код", "#3ecf8e"),
+        (1, "сеть", "#4a9eff")], path=path)
+    text = path.read_text(encoding="utf-8")
+
+    assert "accent-color = #3ecf8e" in text
+    assert "workspace = 1:код:#3ecf8e" in text
+    assert "workspace = 2:сеть:#4a9eff" in text
+    # Ключи, которые util.c не знает, попали бы в лог как «unknown key» и
+    # остались бы незамеченными пользователем.
+    known = ("terminal", "launcher", "file-manager", "screenshot",
+        "lock-command", "lid-command", "cursor-theme", "xkb-layout",
+        "workspace", "rule", "bind", "background-color", "accent-color",
+        "border-color", "decor-color", "text-color", "background", "layout",
+        "workspaces", "gap-inner", "gap-outer", "border-width", "cursor-size",
+        "idle-timeout", "output-scale", "headless-size", "animations",
+        "anim-duration", "focus-follows-mouse", "server-side-decoration")
+    for line in text.splitlines():
+        if not line or line.startswith("#"):
+            continue
+        key = line.split("=")[0].strip()
+        assert key in known, f"bgwl.conf writes unknown key {key!r}"
+
+
+def test_apply_writes_files_and_tells_compositor(tmp_path, monkeypatch):
+    monkeypatch.setattr(themes, "THEME_CSS", tmp_path / "theme.css")
+    calls = []
+
+    class FakeCompositor:
+        def set(self, key, value):
+            calls.append((key, value))
+            return {"type": "state"}
+
+    applied = themes.apply(themes.Palette(accent="#ff5c7a"),
+        FakeCompositor(), streams=[(0, "код", "#ff5c7a")])
+    assert (tmp_path / "theme.css").is_file()
+    assert applied == ["css", "conf", "compositor"]
+    assert calls == [("accent", "#ff5c7a")]
+
+
+def test_apply_reports_compositor_failure_instead_of_hiding_it(tmp_path,
+        monkeypatch):
+    monkeypatch.setattr(themes, "THEME_CSS", tmp_path / "theme.css")
+
+    class Broken:
+        def set(self, key, value):
+            raise RuntimeError("socket closed")
+
+    applied = themes.apply(themes.Palette(), Broken())
+    assert any(note.startswith("compositor:") for note in applied)
+
+
+# ------------------------------------------------------- системные индикаторы
+def test_network_icon_follows_kind_and_state():
+    assert systeminfo.Network(connected=False).icon == \
+        "network-wired-disconnected-symbolic"
+    assert systeminfo.Network(connected=True, kind="wifi").icon == \
+        "network-wireless-signal-good-symbolic"
+    assert systeminfo.Network(connected=True, kind="wifi", strong=False).icon == \
+        "network-wireless-signal-weak-symbolic"
+    assert systeminfo.Network(connected=True, kind="ethernet").icon == \
+        "network-wired-symbolic"
+
+
+def test_battery_labels_and_thresholds():
+    assert systeminfo.Battery(percent=10, charging=False, present=True).icon == \
+        "battery-caution-symbolic"
+    assert systeminfo.Battery(percent=10, charging=True, present=True).icon == \
+        "battery-caution-charging-symbolic"
+    assert systeminfo.Battery(percent=70, charging=False, present=True).icon == \
+        "battery-good-symbolic"
+    assert systeminfo.Battery(percent=50, charging=False, present=True,
+        time_minutes=95).label == "50% · 1ч 35м"
+    assert systeminfo.Battery(percent=0, charging=False, present=False).label == "сеть"
+
+
+def test_collect_degrades_without_any_service(monkeypatch):
+    """Ни NetworkManager, ни UPower, ни PipeWire: панель не падает."""
+    for name in ("read_network", "read_battery", "read_audio", "read_brightness"):
+        monkeypatch.setattr(systeminfo, name, lambda: None)
+    info = systeminfo.collect()
+    assert info.network is None and info.audio is None
+    assert "network" in info.warnings and "audio" in info.warnings
+
+
+def test_read_network_parses_nmcli_table(monkeypatch):
+    # nmcli экранирует только тот ':', что входит в имя: вывод для SSID
+    # «My SSID:5GHz» — wifi:My SSID\:5GHz:connected
+    machine_line = "wifi:My SSID\\:5GHz:connected\n"
+    monkeypatch.setattr(systeminfo, "_run",
+        lambda args, timeout=2.0: machine_line
+            if args[:2] == ["nmcli", "-t"] else None)
+    network = systeminfo.read_network()
+    assert network.kind == "wifi"
+    assert network.description == "My SSID:5GHz"
+
+
+def test_read_network_without_nmcli_falls_back_to_dbus(monkeypatch):
+    monkeypatch.setattr(systeminfo, "_run", lambda args, timeout=2.0: None)
+    monkeypatch.setattr(systeminfo, "_dbus_get",
+        lambda *a, **kw: "(variant boolean, true>)" if a[3] == "State" else None)
+    network = systeminfo.read_network()
+    assert network is not None and network.connected
+
+
+def test_read_audio_handles_pactl_format(monkeypatch):
+    replies = {
+        ("pactl", "get-sink-volume"): "Volume: front-left: 45872 /  70% / -9.34 dB\n",
+        ("pactl", "get-sink-mute"): "Muted: no\n",
+    }
+
+    def fake_run(args, timeout=2.0):
+        return replies.get(tuple(args[:2]))
+
+    monkeypatch.setattr(systeminfo, "_run", fake_run)
+    audio = systeminfo.read_audio()
+    assert audio.volume == 70 and audio.muted is False
+    assert audio.icon == "audio-volume-medium-symbolic"
+
+
+def test_needs_attention_only_on_low_unplugged_battery():
+    info = systeminfo.SystemInfo(
+        battery=systeminfo.Battery(percent=15, charging=False, present=True))
+    assert info.needs_attention
+    charged = systeminfo.SystemInfo(
+        battery=systeminfo.Battery(percent=15, charging=True, present=True))
+    assert not charged.needs_attention
+
+
+# ------------------------------------------------------------- клиент bgwl
+STATE_FIXTURE = {
+    "type": "state", "version": 1, "compositor": "bgwl",
+    "locked": False, "panel_visible": True,
+    "settings": {"layout": "tile", "workspaces": 6, "gap-inner": 6,
+        "gap-outer": 8, "border-width": 2, "animations": True,
+        "anim-duration": 140, "focus-follows-mouse": False,
+        "idle-timeout": 300, "accent": "#f2a33d", "terminal": "foot",
+        "launcher": "bglauncher", "background": ""},
+    "streams": [
+        {"index": 0, "name": "поток 1", "layout": "tile", "active": True,
+            "master-percent": 55, "master-count": 1, "split": "right",
+            "windows": 2, "accent": "#f2a33d"},
+        {"index": 1, "name": "код", "layout": "even", "active": False,
+            "master-percent": 55, "master-count": 1, "split": "right",
+            "windows": 0, "accent": "#4a9eff"},
+    ],
+    "outputs": [{"name": "eDP-1", "description": "Panel",
+        "box": {"x": 0, "y": 0, "width": 1920, "height": 1200},
+        "usable": {"x": 0, "y": 34, "width": 1920, "height": 1166},
+        "scale": 1.5, "enabled": True, "refresh": 60000}],
+    "windows": [
+        {"id": 1, "app_id": "foot", "title": "сборка", "workspace": 0,
+            "pid": 4242, "focused": True, "tiled": True, "maximized": False,
+            "fullscreen": False, "above": False, "sticky": False,
+            "decorated": True, "mapped": True, "accent": "#f2a33d",
+            "box": {"x": 8, "y": 42, "width": 1050, "height": 1124}},
+        {"id": 2, "app_id": "firefox", "title": "", "workspace": 0,
+            "pid": 4243, "focused": False, "tiled": True, "maximized": False,
+            "fullscreen": False, "above": True, "sticky": False,
+            "decorated": True, "mapped": True, "accent": "#f2a33d",
+            "box": {"x": 1066, "y": 42, "width": 846, "height": 1124}},
+    ],
+    "focused": 1,
+}
+
+
+class FakeCompositorServer:
+    """Минимальная подделка bgwl_ctl: та же схема «строка → JSON»."""
+
+    def __init__(self, path):
+        self.path = path
+        self.received = []
+        self.server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.server.bind(str(path))
+        self.server.listen(4)
+        self.thread = threading.Thread(target=self._serve, daemon=True)
+
+    def _serve(self):
+        while True:
+            try:
+                conn, _ = self.server.accept()
+            except OSError:
+                return
+            with conn:
+                line = conn.recv(4096).split(b"\n")[0].decode()
+                self.received.append(line)
+                if line.startswith("set accent bad"):
+                    conn.sendall(b'{"type":"error","error":"bad colour","key":"accent"}\n')
+                elif line == "ping":
+                    conn.sendall(b'{"type":"pong"}\n')
+                else:
+                    conn.sendall(json.dumps(STATE_FIXTURE).encode() + b"\n")
+
+    def start(self):
+        self.thread.start()
+
+    def stop(self):
+        self.server.close()
+
+
+@pytest.fixture
+def fake_bgwl(tmp_path, monkeypatch):
+    path = tmp_path / "compositor.sock"
+    server = FakeCompositorServer(path)
+    server.start()
+    monkeypatch.setenv("BGWL_CONTROL_SOCKET", str(path))
+    yield server
+    server.stop()
+
+
+def test_socket_path_prefers_environment(fake_bgwl):
+    assert socket_path() == Path(os.environ["BGWL_CONTROL_SOCKET"])
+
+
+def test_state_snapshot_exposes_the_desktop_model(fake_bgwl):
+    snapshot = Compositor().state()
+    assert snapshot.active_stream.index == 0
+    assert snapshot.stream(1).accent == "#4a9eff"
+    assert [w.id for w in snapshot.windows_on(0)] == [1, 2]
+    assert snapshot.windows_on(1) == []
+    assert snapshot.outputs[0].usable == (0, 34, 1920, 1166)
+    assert snapshot.settings["launcher"] == "bglauncher"
+
+    foot, firefox = snapshot.windows
+    assert foot.focused and foot.label == "сборка"
+    assert firefox.label == "firefox", "пустой title не должен давать пустую строку"
+    assert firefox.above and not firefox.focused
+
+
+def test_command_returns_state_and_raises_on_error(fake_bgwl):
+    compositor = Compositor()
+    assert compositor.command("workspace 1")["type"] == "state"
+    with pytest.raises(RuntimeError):
+        compositor.set("accent", "bad")
+
+
+def test_missing_socket_is_an_explicit_error(tmp_path, monkeypatch):
+    monkeypatch.setenv("BGWL_CONTROL_SOCKET", str(tmp_path / "nothing.sock"))
+    with pytest.raises(RuntimeError):
+        Compositor().state()

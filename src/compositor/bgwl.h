@@ -95,6 +95,7 @@ static inline int bgwl_min(int a, int b) {
 struct bgwl_buffer {
 	struct wlr_buffer base;
 	cairo_surface_t *surface;
+	bool opaque;
 };
 
 enum bgwl_cursor_mode {
@@ -488,7 +489,11 @@ bool bgwl_spawn(struct bgwl_server *server, const char *command);
 void bgwl_run_action(struct bgwl_server *server, const char *action);
 /* cairo image surface wrapped as a struct wlr_buffer so it can be pushed
  * into the scene graph as a wlr_scene_buffer node. */
-struct bgwl_buffer *bgwl_cairo_buffer_create(int width, int height);
+/* opaque=true отдаёт буфер как XRGB8888: для залитого цветом заголовка это не
+ * оптимизация, а корректность — как ARGB композитор читал бы альфу из
+ * G-канала cairo-пикселя. Для изображений с прозрачностью — false. */
+struct bgwl_buffer *bgwl_cairo_buffer_create(int width, int height,
+	bool opaque);
 void bgwl_buffer_drop(struct bgwl_buffer *buffer);
 /* Draws the solid+text titlebar with the window buttons for a toplevel. */
 struct bgwl_buffer *bgwl_draw_titlebar(struct bgwl_server *server,
@@ -618,7 +623,6 @@ void bgwl_anim_finish(struct bgwl_server *server);
 /* Workspace slide: moves the two workspace trees in opposite directions. */
 void bgwl_anim_workspace_slide(struct bgwl_server *server,
 	struct bgwl_workspace *from, struct bgwl_workspace *to, int direction);
-void bgwl_anim_window_open(struct bgwl_toplevel *toplevel);
 
 /* --- xwayland.c --- */
 struct bgwl_xwm *bgwl_xwayland_create(struct bgwl_server *server);

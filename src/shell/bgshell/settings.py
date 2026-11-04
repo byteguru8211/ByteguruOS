@@ -49,14 +49,23 @@ SETTINGS: dict[str, Setting] = {
         Scope.SESSION, requires_root=True,
     ),
     "theme.name": Setting(
-        "theme.name", "choice", "byteguru-light", "Тема оформления", Scope.SESSION,
+        "theme.name", "choice", "byteguru-dark", "Тема оформления", Scope.SESSION,
         choices=("byteguru-light", "byteguru-dark", "byteguru-high-contrast"),
+    ),
+    "theme.mode": Setting(
+        "theme.mode", "choice", "dark",
+        "Режим палитры: влияет на фон оболочки и композитор", Scope.SESSION,
+        choices=("dark", "light"),
+    ),
+    "theme.accent": Setting(
+        "theme.accent", "str", "#f2a33d",
+        "Акцентный цвет в форме #RRGGBB: рамка фокуса, потоки, кнопки", Scope.SESSION,
     ),
     "theme.font-scale": Setting(
         "theme.font-scale", "int", 100, "Масштаб шрифта, проценты", Scope.SESSION, minimum=75, maximum=200
     ),
     "panel.position": Setting(
-        "panel.position", "choice", "bottom", "Положение панели", Scope.SESSION,
+        "panel.position", "choice", "top", "Положение панели", Scope.SESSION,
         choices=("top", "bottom"),
     ),
     "panel.autohide": Setting(

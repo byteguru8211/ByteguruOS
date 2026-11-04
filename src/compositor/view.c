@@ -105,7 +105,15 @@ void bgwl_toplevel_get_geometry(struct bgwl_toplevel *toplevel,
 void bgwl_toplevel_set_geometry(struct bgwl_toplevel *toplevel,
 		struct wlr_box box) {
 	struct wlr_scene_node *node = &toplevel->scene_tree->node;
+	struct wlr_xdg_surface *base = toplevel->xdg_toplevel->base;
 	int decor = decor_height(toplevel);
+
+	/* Configuring a surface that has not completed its first commit makes
+	 * wlroots complain and queues a configure the client cannot ack; the
+	 * commit handler will place the window as soon as it exists. */
+	if (!base->initialized) {
+		return;
+	}
 
 	int content_width = box.width;
 	int content_height = box.height - decor;
@@ -193,6 +201,9 @@ static void bgwl_toplevel_update_border(struct bgwl_toplevel *toplevel) {
 	wlr_scene_node_set_position(&toplevel->border->node, -width, -width);
 	wlr_scene_rect_set_size(toplevel->border, frame.width + 2 * width,
 		frame.height + 2 * width);
+	wlr_log(WLR_DEBUG, "border id=%d frame %dx%d decor=%d node=%dx%d",
+		toplevel->id, frame.width, frame.height, decor_height(toplevel),
+		frame.width + 2 * width, frame.height + 2 * width);
 }
 
 void bgwl_toplevel_update_appearance(struct bgwl_toplevel *toplevel) {
@@ -201,7 +212,11 @@ void bgwl_toplevel_update_appearance(struct bgwl_toplevel *toplevel) {
 	if (surface == NULL) {
 		return;
 	}
-	bool focused = server->seat->keyboard_state.focused_surface == surface;
+	/* Собственная запись фокуса, а не состояние клавиатуры места: без
+	 * физической клавиатуры (headless-тест, ноутбук без ввода) notify_enter не
+	 * происходит, и окно выглядело бы неактивным, хотя оно именно то, на
+	 * которое идут все действия. */
+	bool focused = server->focus_view == toplevel;
 
 	if (toplevel->border != NULL) {
 		const float *color = focused
@@ -569,7 +584,7 @@ static void bgwl_toplevel_redraw_decor(struct bgwl_toplevel *toplevel) {
 	}
 
 	struct bgwl_server *server = toplevel->server;
-	bool focused = server->seat->keyboard_state.focused_surface == base->surface;
+	bool focused = server->focus_view == toplevel;
 	const float *accent = toplevel->ws != NULL ? toplevel->ws->accent
 		: server->cfg.accent_color;
 	struct bgwl_buffer *buffer = bgwl_draw_titlebar(server, width,
@@ -595,6 +610,10 @@ void bgwl_toplevel_set_tiled(struct bgwl_toplevel *toplevel, bool value) {
 		return;
 	}
 	toplevel->tiled = value;
+
+	if (!toplevel->xdg_toplevel->base->initialized) {
+		return;
+	}
 
 	uint32_t edges = value
 		? (WLR_EDGE_TOP | WLR_EDGE_BOTTOM | WLR_EDGE_LEFT | WLR_EDGE_RIGHT)
@@ -648,7 +667,9 @@ void bgwl_toplevel_set_maximized(struct bgwl_toplevel *toplevel, bool value) {
 	}
 	struct bgwl_server *server = toplevel->server;
 	toplevel->maximized = value;
-	wlr_xdg_toplevel_set_maximized(toplevel->xdg_toplevel, value);
+	if (toplevel->xdg_toplevel->base->initialized) {
+		wlr_xdg_toplevel_set_maximized(toplevel->xdg_toplevel, value);
+	}
 
 	if (value) {
 		claim_window_geometry(toplevel);
@@ -673,7 +694,9 @@ void bgwl_toplevel_set_fullscreen(struct bgwl_toplevel *toplevel, bool value) {
 	}
 	struct bgwl_server *server = toplevel->server;
 	toplevel->fullscreen = value;
-	wlr_xdg_toplevel_set_fullscreen(toplevel->xdg_toplevel, value);
+	if (toplevel->xdg_toplevel->base->initialized) {
+		wlr_xdg_toplevel_set_fullscreen(toplevel->xdg_toplevel, value);
+	}
 
 	if (value) {
 		claim_window_geometry(toplevel);
@@ -818,9 +841,6 @@ static void toplevel_handle_map(struct wl_listener *listener, void *data) {
 
 	bgwl_toplevel_redraw_decor(toplevel);
 	bgwl_toplevel_focus(toplevel);
-	if (server->cfg.animations) {
-		bgwl_anim_window_open(toplevel);
-	}
 	bgwl_ctl_broadcast(server, "windows");
 }
 

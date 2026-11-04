@@ -25,7 +25,10 @@ APPS = [
 # ---------------------------------------------------------------------- настройки
 def test_settings_have_defaults_for_every_key():
     values = settings.SettingsStore(path=Path("не используется до save")).effective()
-    assert values["theme.name"] == "byteguru-light"
+    # Марочный выбор «тёмная тема по умолчанию» закреплён в схеме, а не в этом
+    # тесте: тест проверяет, что значение есть и совпадает со схемой.
+    assert values["theme.name"] == settings.SETTINGS["theme.name"].default
+    assert values["theme.mode"] == "dark"
     assert values["wincompat.enabled"] is True
     assert values["storage.ntfs-write"] is False
     # Ни одна настройка не должна оставаться без значения по умолчанию.
@@ -54,11 +57,13 @@ def test_save_roundtrip_keeps_only_changes(tmp_path):
     path = tmp_path / "config"
     store = settings.SettingsStore.load(path)
     store.set("boot.default-os", "windows")
-    store.set("theme.name", "byteguru-dark")
+    # Значение, совпадающее с заводским, в changed() не попадает — это и есть
+    # смысл «сохраняем только изменения», поэтому выбираем заведомо другое.
+    store.set("theme.name", "byteguru-high-contrast")
     store.save()
     reloaded = settings.SettingsStore.load(path)
     assert reloaded.get("boot.default-os") == "windows"
-    assert reloaded.get("theme.name") == "byteguru-dark"
+    assert reloaded.get("theme.name") == "byteguru-high-contrast"
     assert set(reloaded.changed()) == {"boot.default-os", "theme.name"}
     assert reloaded.pending_reboot() == ["boot.default-os"]
 
@@ -68,7 +73,10 @@ def test_unknown_keys_in_file_are_reported_not_fatal(tmp_path):
     path.write_text("[panel]\nposition = middle\nliquid = true\n", encoding="utf-8")
     store = settings.SettingsStore.load(path)
     assert "panel.liquid" in store.unknown_keys
-    assert store.get("panel.position") == "bottom"
+    # Значение вне choices отбрасывается к заводскому, а не к строке из файла.
+    # Сверяемся со схемой, а не с литералом: дефолт панели — часть дизайна,
+    # и он имеет право поменяться, не ломая этот тест.
+    assert store.get("panel.position") == settings.SETTINGS["panel.position"].default
 
 
 def test_scope_listing():

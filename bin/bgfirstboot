@@ -1,7 +1,22 @@
-#!/usr/bin/env python3
-"""Точка входа мастера первого запуска (устанавливается как /usr/bin/bgfirstboot)."""
+#!/bin/sh
+# Точка входа мастера первого запуска (устанавливается как /usr/bin/bgfirstboot).
 
-from bgshell.ui.firstboot_window import main
+# Обёртка на shell нужна по одной причине: gtk4-layer-shell обязан быть
+# пред-загружен, а GDK — выбрать wayland до первой инициализации дисплея. Оба
+# решения принимаются только окружением процесса; из Python их принять уже
+# нельзя, а перезапускать себя из модуля — значит потерять командную строку.
+if [ -n "${WAYLAND_DISPLAY:-}" ]; then
+	for candidate in \
+		/usr/lib/x86_64-linux-gnu/libgtk4-layer-shell.so.0 \
+		/usr/lib/libgtk4-layer-shell.so.0 \
+		/usr/lib64/libgtk4-layer-shell.so.0
+	do
+		if [ -f "$candidate" ]; then
+			export LD_PRELOAD="$candidate${LD_PRELOAD:+:$LD_PRELOAD}"
+			break
+		fi
+	done
+	export GDK_BACKEND=wayland
+fi
 
-if __name__ == "__main__":
-    raise SystemExit(main())
+exec python3 -m bgshell.ui.firstboot_window "$@"

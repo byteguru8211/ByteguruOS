@@ -6,17 +6,24 @@
  * by per-frame work, and both stop on their own after a fixed number of
  * milliseconds.
  *
- * What is deliberately not here:
+ * What is deliberately not here, and why:
  *
- * - Window scale/zoom animations. wlroots 0.18 cannot scale a surface in the
- *   scene graph without a viewporter round-trip per client, so a zoom would
- *   either be fake (scaling our own buffers only) or cost every client a
- *   reconfigure.
+ * - Window fade-in. wlroots 0.18 has no per-node opacity: the only setter is
+ *   wlr_scene_buffer_set_opacity(), which addresses individual buffers. A
+ *   client surface swaps buffers on every commit, so an animated opacity set
+ *   this way applies to the buffer that happens to exist right now and leaves
+ *   the window permanently translucent — measured on screen, a foot window
+ *   stayed at about half opacity after its titlebar was redrawn. Geometry
+ *   animations are safe; opacity ones are not, until the target wlroots gains
+ *   wlr_scene_node_set_opacity().
+ * - Window scale/zoom. Scaling a surface in the scene graph needs a viewporter
+ *   round-trip per client, so a zoom would be fake (our own buffers only) or
+ *   cost every client a reconfigure.
  * - Close animations. The client destroys its surface when it closes; keeping
- *   the last buffer alive to fade it out means copying it, which is a full
- *   frame of memory per window for an effect the user sees for 90 ms.
- * - Blur, shadows, drop-in glow. They need extra render passes, and ByteguruOS
- *   targets hardware where that is the difference between 60 fps and 40.
+ *   the last buffer alive to fade it out means copying it — a full frame of
+ *   memory per window for an effect the user sees for 90 ms.
+ * - Blur, shadows, glow. Extra render passes, and ByteguruOS targets hardware
+ *   where that is the difference between 60 fps and 40.
  *
  * The slide moves exactly two scene nodes regardless of how many windows are
  * open, which is the practical payoff of giving every workspace its own tree.
@@ -38,7 +45,6 @@
 
 enum bgwl_anim_kind {
 	BGWL_ANIM_WORKSPACE_SLIDE,
-	BGWL_ANIM_WINDOW_FADE,
 };
 
 struct bgwl_animation {
@@ -77,13 +83,6 @@ static void animation_finish(struct bgwl_animation *animation) {
 			/* Parked at the origin but disabled, so the next slide in the
 			 * same direction starts from the right place. */
 			wlr_scene_node_set_position(&animation->from->tree->node, 0, 0);
-		}
-		break;
-	case BGWL_ANIM_WINDOW_FADE:
-		if (animation->toplevel != NULL) {
-			animation->toplevel->opacity = 1.0f;
-			bgwl_scene_set_opacity(&animation->toplevel->scene_tree->node,
-				1.0f);
 		}
 		break;
 	}
@@ -131,14 +130,6 @@ static int animation_tick(void *user_data) {
 			}
 			break;
 		}
-		case BGWL_ANIM_WINDOW_FADE:
-			if (animation->toplevel != NULL) {
-				float opacity = (float)(0.0 + eased);
-				animation->toplevel->opacity = opacity;
-				bgwl_scene_set_opacity(&animation->toplevel->scene_tree->node,
-					opacity);
-			}
-			break;
 		}
 	}
 
@@ -204,19 +195,3 @@ void bgwl_anim_workspace_slide(struct bgwl_server *server,
 	start_animation(server, animation);
 }
 
-void bgwl_anim_window_open(struct bgwl_toplevel *toplevel) {
-	struct bgwl_server *server = toplevel->server;
-	if (!server->cfg.animations || server->cfg.anim_duration_ms <= 0) {
-		return;
-	}
-	struct bgwl_animation *animation = calloc(1, sizeof(*animation));
-	if (animation == NULL) {
-		return;
-	}
-	animation->kind = BGWL_ANIM_WINDOW_FADE;
-	animation->toplevel = toplevel;
-	/* Start invisible; the first tick brings it up. Skipping the initial set
-	 * would show one fully opaque frame and look like a glitch instead. */
-	bgwl_scene_set_opacity(&toplevel->scene_tree->node, 0.0f);
-	start_animation(server, animation);
-}

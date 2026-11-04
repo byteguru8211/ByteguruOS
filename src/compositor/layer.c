@@ -42,6 +42,46 @@ static int tree_index_for_layer(enum zwlr_layer_shell_v1_layer layer) {
 }
 
 /*
+ * Вычитание эксклюзивной зоны из полезной области.
+
+ * wlroots 0.18 располагает поверхность и сохраняет её зону в своём helper, но
+ * полезную область вызывающему не уменьшает — это обязанность композитора.
+ * Приоритет края берётся по якорям: панель с TOP|LEFT|RIGHT забирает полосу
+ * сверху, а поверхность, заякоренная сразу в TOP и BOTTOM, зоны не имеет
+ * вообще (протокол так и трактует).
+ */
+static void apply_exclusive_zone(struct wlr_box *usable,
+		const struct wlr_layer_surface_v1_state *state) {
+	if (state->exclusive_zone <= 0) {
+		return;
+	}
+	int zone = state->exclusive_zone;
+	bool top = state->anchor & ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP;
+	bool bottom = state->anchor & ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM;
+	bool left = state->anchor & ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT;
+	bool right = state->anchor & ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT;
+
+	/* Растянутая по LEFT|RIGHT панель с якорем TOP — обычный случай, поэтому
+	 * вертикальные края проверяются первыми и «оба края сразу» отбрасывается
+	 * только в пределах своей оси. */
+	if (top && !bottom) {
+		usable->y += zone;
+		usable->height -= zone;
+	} else if (bottom && !top) {
+		usable->height -= zone;
+	} else if (left && !right) {
+		usable->x += zone;
+		usable->width -= zone;
+	} else if (right && !left) {
+		usable->width -= zone;
+	} else {
+		return;
+	}
+	usable->width = bgwl_max(1, usable->width);
+	usable->height = bgwl_max(1, usable->height);
+}
+
+/*
  * Every layer surface on an output is reconfigured together, in protocol layer
  * order, because exclusive zones stack: a panel and a dock on the same edge
  * must not both claim the pixels, and the only way to get that right is to
@@ -81,11 +121,24 @@ void bgwl_layer_update_usable_areas(struct bgwl_server *server) {
 				if (ls->scene_layer_surface == NULL) {
 					continue;
 				}
+				const struct wlr_layer_surface_v1_state *state =
+					&ls->layer_surface->current;
+				wlr_log(WLR_DEBUG,
+					"layer '%s' layer=%d exclusive=%d size=%dx%d anchors=%d/%d",
+					ls->layer_surface->namespace ? ls->layer_surface->namespace
+						: "", (int)state->layer, state->exclusive_zone,
+					state->desired_width, state->desired_height,
+					(int)state->anchor, (int)ls->layer_surface->pending.anchor);
 				wlr_scene_layer_surface_v1_configure(
 					ls->scene_layer_surface, &full_area, &usable);
+				apply_exclusive_zone(&usable, &ls->layer_surface->current);
 			}
 		}
 		bg_output->usable = usable;
+
+		wlr_log(WLR_DEBUG, "output '%s' usable %dx%d%+d%+d after layer pass",
+			bg_output->wlr_output->name, usable.width, usable.height, usable.x,
+			usable.y);
 	}
 
 	/* The desktop geometry only matters because the window layout follows it. */
@@ -152,6 +205,8 @@ static void layer_surface_handle_unmap(struct wl_listener *listener, void *data)
 		ls->server->panel_visible = false;
 	}
 	bgwl_layer_update_usable_areas(ls->server);
+	/* Окна, которые были под этой зоной, должны вернуться в строку. */
+	bgwl_reflow(ls->server);
 }
 
 static void layer_surface_handle_new_popup(struct wl_listener *listener,

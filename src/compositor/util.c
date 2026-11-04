@@ -553,6 +553,11 @@ void bgwl_config_load(struct bgwl_config *cfg) {
 		cfg->bg_image = NULL;
 	}
 	bgwl_env_color("BGWL_DECOR_COLOR", cfg->decor_color);
+	wlr_log(WLR_INFO, "theme: decor %.3f,%.3f,%.3f a=%.3f | text a=%.3f | "
+		"accent a=%.3f", (double)cfg->decor_color[0],
+		(double)cfg->decor_color[1], (double)cfg->decor_color[2],
+		(double)cfg->decor_color[3], (double)cfg->text_color[3],
+		(double)cfg->accent_color[3]);
 	bgwl_env_color("BGWL_TEXT_COLOR", cfg->text_color);
 	bgwl_env_color("BGWL_ACCENT_COLOR", cfg->accent_color);
 	if (getenv("BGWL_HEADLESS_SIZE") != NULL) {
@@ -705,7 +710,8 @@ static bool bgwl_cairo_buffer_begin_data_ptr_access(struct wlr_buffer *wlr_buffe
 	if (flags & WLR_BUFFER_DATA_PTR_ACCESS_WRITE) {
 		return false;
 	}
-	*format = DRM_FORMAT_ARGB8888;
+	/* cairo ARGB32 на little-endian лежит как байты B,G,R,A. */
+	*format = buffer->opaque ? DRM_FORMAT_XRGB8888 : DRM_FORMAT_ARGB8888;
 	*data = cairo_image_surface_get_data(buffer->surface);
 	*stride = cairo_image_surface_get_stride(buffer->surface);
 	return true;
@@ -723,7 +729,8 @@ static const struct wlr_buffer_impl bgwl_cairo_buffer_impl = {
 	.end_data_ptr_access = bgwl_cairo_buffer_end_data_ptr_access,
 };
 
-struct bgwl_buffer *bgwl_cairo_buffer_create(int width, int height) {
+struct bgwl_buffer *bgwl_cairo_buffer_create(int width, int height,
+		bool opaque) {
 	if (width <= 0 || height <= 0) {
 		return NULL;
 	}
@@ -743,6 +750,7 @@ struct bgwl_buffer *bgwl_cairo_buffer_create(int width, int height) {
 		return NULL;
 	}
 
+	buffer->opaque = opaque;
 	wlr_buffer_init(&buffer->base, &bgwl_cairo_buffer_impl, width, height);
 	return buffer;
 }
@@ -806,7 +814,7 @@ struct bgwl_buffer *bgwl_draw_titlebar(struct bgwl_server *server,
 		const float accent[static 4]) {
 	struct bgwl_config *cfg = &server->cfg;
 	struct bgwl_buffer *buffer = bgwl_cairo_buffer_create(width,
-		BGWL_DECOR_HEIGHT);
+		BGWL_DECOR_HEIGHT, true);
 	if (buffer == NULL) {
 		return NULL;
 	}
@@ -908,7 +916,7 @@ struct bgwl_buffer *bgwl_load_png(const char *path) {
 
 	int width = cairo_image_surface_get_width(surface);
 	int height = cairo_image_surface_get_height(surface);
-	struct bgwl_buffer *buffer = bgwl_cairo_buffer_create(width, height);
+	struct bgwl_buffer *buffer = bgwl_cairo_buffer_create(width, height, false);
 	if (buffer == NULL) {
 		cairo_surface_destroy(surface);
 		return NULL;
