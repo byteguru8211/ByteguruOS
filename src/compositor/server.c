@@ -46,9 +46,12 @@ static void usage(const char *argv0) {
 		"  -v, --version         print version and exit\n"
 		"  -h, --help            show this help and exit\n"
 		"\n"
-		"Environment: BGWL_TERMINAL, BGWL_BACKGROUND, BGWL_BACKGROUND_COLOR,\n"
-		"BGWL_XKB_LAYOUT (default ru,us), BGWL_HEADLESS_SIZE (default 1280x800).\n"
-		"See src/compositor/README.md for the full list.\n", argv0);
+		"\n"
+		"Configuration: ~/.config/byteguru/bgwl.conf, then BGWL_* variables,\n"
+		"then these options. See src/compositor/README.md for every key.\n"
+		"\n"
+		"Control socket: $XDG_RUNTIME_DIR/byteguru/compositor.sock (bgctl).\n",
+		argv0);
 }
 
 /* Hand-rolled parser: only exact long options and single-character short
@@ -276,6 +279,8 @@ static void init_server_listeners(struct bgwl_server *server) {
 		&server->cursor_button, &server->cursor_axis, &server->cursor_frame,
 		&server->new_input, &server->new_output,
 		&server->request_cursor, &server->request_set_selection,
+		&server->new_decoration, &server->output_manager_apply,
+		&server->output_manager_test,
 	};
 	for (size_t i = 0; i < sizeof(listeners) / sizeof(listeners[0]); i++) {
 		wl_list_init(&listeners[i]->link);
@@ -296,6 +301,9 @@ void bgwl_server_init(struct bgwl_server *server) {
 	wl_list_init(&server->toplevels);
 	wl_list_init(&server->outputs);
 	wl_list_init(&server->keyboards);
+	wl_list_init(&server->layer_surfaces);
+	wl_list_init(&server->workspaces);
+	server->next_window_id = 1;
 
 	init_server_listeners(server);
 }
@@ -382,10 +390,13 @@ bool bgwl_server_start(struct bgwl_server *server) {
 	}
 	wlr_cursor_attach_output_layout(server->cursor, server->output_layout);
 
-	server->cursor_mgr = wlr_xcursor_manager_create(NULL, 24);
+	/* Theme name NULL means "whatever the XDG default cursor is"; passing
+	 * the configured name keeps bgwl and the GTK shell on the same cursor. */
+	server->cursor_mgr = wlr_xcursor_manager_create(
+		server->cfg.cursor_theme, (uint32_t)server->cfg.cursor_size);
 	if (server->cursor_mgr == NULL) {
-		wlr_log(WLR_ERROR, "wlr_xcursor_manager_create failed "
-			"(is the 'default' xcursor theme installed?)");
+		wlr_log(WLR_ERROR, "wlr_xcursor_manager_create failed for theme '%s' "
+			"(is it installed?)", server->cfg.cursor_theme);
 		return false;
 	}
 
@@ -418,6 +429,38 @@ bool bgwl_server_start(struct bgwl_server *server) {
 	wl_signal_add(&server->seat->events.request_set_selection,
 		&server->request_set_selection);
 
+	/* Protocol globals: everything the portal, the clipboard manager and a
+	 * sandboxed Flatpak need in order to start at all. */
+	if (!bgwl_protocols_create(server)) {
+		wlr_log(WLR_ERROR, "protocol globals could not be registered");
+		return false;
+	}
+
+	/* Streams are the last structural piece: a toplevel needs a workspace
+	 * tree to live in, so this must run before any client can connect. */
+	bgwl_workspaces_init(server);
+	bgwl_anim_init(server);
+
+	/* Output-management is advertised by protocols.c; the apply/test handling
+	 * and the first configuration publish happen here, once the layout has
+	 * outputs in it. */
+	bgwl_output_management_install(server);
+
+	server->ctl = bgwl_ctl_create(server);
+	if (server->ctl == NULL) {
+		/* Not fatal: the desktop still works, the shell simply cannot see
+		 * window state. Say so loudly, because it looks like a bug from the
+		 * user's side. */
+		wlr_log(WLR_ERROR, "control socket unavailable: bgpanel will not "
+			"show windows (check XDG_RUNTIME_DIR)");
+	}
+
+	server->session = bgwl_session_create(server);
+	if (server->session == NULL) {
+		wlr_log(WLR_ERROR, "session power/lock subsystem could not start");
+		return false;
+	}
+
 	if (!add_signal_handler(server, SIGTERM, &server->sigterm_source) ||
 			!add_signal_handler(server, SIGINT, &server->sigint_source)) {
 		return false;
@@ -438,6 +481,14 @@ bool bgwl_server_start(struct bgwl_server *server) {
 	}
 
 	setenv("WAYLAND_DISPLAY", socket, true);
+	/* The shell finds the compositor's control socket through this, so a
+	 * non-default XDG_RUNTIME_DIR does not break the panel. */
+	const char *runtime = bgwl_runtime_dir();
+	if (runtime != NULL) {
+		char ctl_path[512];
+		snprintf(ctl_path, sizeof(ctl_path), "%s/compositor.sock", runtime);
+		setenv("BGWL_CONTROL_SOCKET", ctl_path, true);
+	}
 	setenv("BGWL_SESSION_TYPE", "wayland", true);
 	setenv("XDG_SESSION_TYPE", "wayland", true);
 	setenv("XDG_CURRENT_DESKTOP", "ByteguruOS", true);
@@ -461,6 +512,40 @@ struct bgwl_output *bgwl_server_first_output(struct bgwl_server *server) {
 		return output;
 	}
 	return NULL;
+}
+
+/* Union of every output's usable area. Used by the slide animation for its
+ * travel distance and by floating placement for centring. */
+struct wlr_box bgwl_server_usable_box(struct bgwl_server *server) {
+	struct wlr_box union_box = { 0, 0, 0, 0 };
+	bool any = false;
+	struct bgwl_output *output;
+	wl_list_for_each(output, &server->outputs, link) {
+		struct wlr_box box = output->usable;
+		if (box.width <= 0 || box.height <= 0) {
+			continue;
+		}
+		if (!any) {
+			union_box = box;
+			any = true;
+			continue;
+		}
+		int right = bgwl_max(union_box.x + union_box.width, box.x + box.width);
+		int bottom = bgwl_max(union_box.y + union_box.height, box.y + box.height);
+		union_box.x = bgwl_min(union_box.x, box.x);
+		union_box.y = bgwl_min(union_box.y, box.y);
+		union_box.width = right - union_box.x;
+		union_box.height = bottom - union_box.y;
+	}
+	if (any) {
+		return union_box;
+	}
+
+	/* No outputs yet: report the headless geometry so a window mapped before
+	 * the first mode-set still lands somewhere visible. */
+	struct wlr_box fallback = { 0, 0, server->cfg.headless_width,
+		server->cfg.headless_height };
+	return fallback;
 }
 
 /* Warps the cursor to the centre of the layout once outputs exist; called
@@ -505,6 +590,25 @@ void bgwl_server_finish(struct bgwl_server *server) {
 	wl_list_remove(&server->new_output.link);
 	wl_list_remove(&server->request_cursor.link);
 	wl_list_remove(&server->request_set_selection.link);
+	wl_list_remove(&server->new_decoration.link);
+	if (server->output_manager != NULL) {
+		wl_list_remove(&server->output_manager_apply.link);
+		wl_list_remove(&server->output_manager_test.link);
+	}
+
+	if (server->ctl != NULL) {
+		bgwl_ctl_destroy(server->ctl);
+		server->ctl = NULL;
+	}
+	if (server->session != NULL) {
+		bgwl_session_destroy(server->session);
+		server->session = NULL;
+	}
+	bgwl_anim_finish(server);
+
+	/* Windows hold references into the workspace trees, so the toplevel list
+	 * must be emptied before the trees go away. */
+	bgwl_workspaces_finish(server);
 
 	/* Backend first: destroying it fires the output and input destroy events
 	 * our handlers use to drop scene nodes and free per-device state, and at

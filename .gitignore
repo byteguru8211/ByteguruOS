@@ -34,3 +34,7 @@ var/
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# Локальные рабочие каталоги сборки композитора
+build-c/
+build-wl/

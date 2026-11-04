@@ -16,8 +16,8 @@ bgwl_version = '0.0.1'
 
 # Debian ставит версионированные модули (wlroots-0.18.pc) и заголовки в
 # /usr/include/wlroots-0.18; простого libwlroots-dev в trixie больше нет.
-# ВЕРИФИЦИРОВАТЬ: в других дистрибутивах модуль может быть без суффикса —
-# тогда сработает последняя проверка. `pkg-config --list-all | grep -i wlroots`
+# В других дистрибутивах модуль может не иметь суффикса — тогда сработает
+# последняя проверка (wlroots). Проверить: pkg-config --list-all | grep wlroots
 bgwl_wlroots_dep = dependency('wlroots-0.18', version: '>= 0.18.0', required: false)
 if not bgwl_wlroots_dep.found()
 	bgwl_wlroots_dep = dependency('wlroots-0.19', version: '>= 0.19.0', required: false)
@@ -80,11 +80,20 @@ endif
 bgwl_wayland_protocols_dep = dependency('wayland-protocols', version: '>= 1.31')
 bgwl_wayland_protocols_dir = bgwl_wayland_protocols_dep.get_variable('pkgdatadir')
 
-# xdg-shell comes from wayland-protocols. wlr-layer-shell is a wlroots-owned
-# protocol with no home in wayland-protocols, so it is vendored verbatim in
-# protocol/ (MIT, upstream copy — see README.md).
+# These eight are not a wishlist: they are exactly the protocol headers wlroots'
+# own public headers #include, found by
+#   grep -rho '#include "[a-z0-9-]*-protocol\.h"' /usr/include/wlroots-0.18/wlr
+# Omit one and the build stops with a missing-header error in a wlroots file,
+# which is why this list is generated from that grep rather than by taste.
 bgwl_protocols = {
 	'xdg-shell': bgwl_wayland_protocols_dir / 'stable/xdg-shell/xdg-shell.xml',
+	'tablet-v2': bgwl_wayland_protocols_dir / 'stable/tablet/tablet-v2.xml',
+	'content-type-v1': bgwl_wayland_protocols_dir / 'staging/content-type/content-type-v1.xml',
+	'cursor-shape-v1': bgwl_wayland_protocols_dir / 'staging/cursor-shape/cursor-shape-v1.xml',
+	'tearing-control-v1': bgwl_wayland_protocols_dir / 'staging/tearing-control/tearing-control-v1.xml',
+	'fullscreen-shell-unstable-v1': bgwl_wayland_protocols_dir / 'unstable/fullscreen-shell/fullscreen-shell-unstable-v1.xml',
+	'pointer-constraints-unstable-v1': bgwl_wayland_protocols_dir / 'unstable/pointer-constraints/pointer-constraints-unstable-v1.xml',
+	# wlroots-owned protocol, no home in wayland-protocols: vendored verbatim.
 	'wlr-layer-shell-unstable-v1': files('protocol/wlr-layer-shell-unstable-v1.xml'),
 }
 
@@ -116,17 +125,21 @@ bgwl_sources = files(
 	'layer.c',
 	'input.c',
 	'util.c',
+	'protocols.c',
+	'workspace.c',
+	'tiling.c',
+	'session.c',
+	'anim.c',
+	'ctl.c',
 )
 
 # -DWLR_USE_UNSTABLE is mandatory: every wlr/* header stops with #error
 # without it. The -I makes the generated protocol headers visible to wlroots'
 # quoted includes; meson normally adds the build directory as a dependency of
 # the custom targets above, so this is a belt-and-braces path.
-# ВЕРИФИЦИРОВАТЬ: the generated protocol headers must be reachable as
+# Verified against 0.18.2: the generated headers must be reachable as
 # "xdg-shell-protocol.h" / "wlr-layer-shell-unstable-v1-protocol.h" from
-# wlroots' own quoted includes. Meson usually adds the custom_target output
-# directory by itself; the explicit -I below is a belt-and-braces path and
-# can be deleted once the build is green.
+# wlroots' own quoted includes, so the build directory is added explicitly.
 bgwl_c_args = ['-DWLR_USE_UNSTABLE', '-I@0@'.format(meson.current_build_dir())]
 
 bgwl_exe = executable(
