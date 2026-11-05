@@ -10,7 +10,7 @@ LB_BINARY_FILESYSTEM="fat32"
 LB_APT_INDICES="false"
 
 # Set boot parameters
-LB_BOOTAPPEND_LIVE="boot=live components hostname=byteguru username=byteguru"
+LB_BOOTAPPEND_LIVE="boot=live components hostname=byteguru username=byteguru console=tty0 console=ttyS0,115200"
 
 # Set boot parameters
 LB_BOOTAPPEND_INSTALL=""

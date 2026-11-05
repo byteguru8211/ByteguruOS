@@ -25,16 +25,57 @@ say() {
 	printf '%s\n' "$1" > /dev/console 2>/dev/null || true
 }
 
+CFG_TARGET=""
+CFG_PROFILE="kiosk"
+CFG_USER="guru"
+CFG_PASSWORD="byteguru"
+CFG_HOSTNAME="byteguru-vm"
+
+# Способ 2: файл-ответ на fat-разделе. Нужен потому, что при загрузке через
+# OVMF командную строку ядру передать нечем (нет -kernel/-append), а
+# headless-прогон установки именно так и стартует.
+find_answer() {
+	local dev point
+	for dev in $(lsblk -n -p -o NAME,FSTYPE | awk '$2 ~ /fat|vfat/ {print $1}'); do
+		point="$(mktemp -d /tmp/byteguru-answer.XXXXXX)"
+		mount -o ro "$dev" "$point" 2>/dev/null || { rmdir "$point"; continue; }
+		if [ -f "$point/byteguru-autoinstall.cfg" ]; then
+			# Значения читаются построчно, а не source-ом: файл лежит на
+			# fat-разделе, который мог быть создан кем угодно, и исполнять
+			# его содержимое как shell нельзя.
+			while IFS='=' read -r key value; do
+				case "$key" in
+					target_disk) CFG_TARGET="$value" ;;
+					profile) CFG_PROFILE="$value" ;;
+					user) CFG_USER="$value" ;;
+					password) CFG_PASSWORD="$value" ;;
+					hostname) CFG_HOSTNAME="$value" ;;
+				esac
+			done < "$point/byteguru-autoinstall.cfg"
+			umount "$point" 2>/dev/null
+			rmdir "$point"
+			return 0
+		fi
+		umount "$point" 2>/dev/null
+		rmdir "$point"
+	done
+	return 1
+}
+
 CMDLINE="$(cat /proc/cmdline)"
+BY_CMDLINE=0
 case " ${CMDLINE} " in
-	*" byteguru.autoinstall "*) ;;
-	*) exit 0 ;;
+	*" byteguru.autoinstall "*) BY_CMDLINE=1 ;;
 esac
 
-TARGET=""
+if [ $BY_CMDLINE -eq 0 ] && ! find_answer; then
+	# Ни флага, ни файла-ответа: обычный живой пользователь, ничего не трогаем.
+	exit 0
+fi
+
 for token in ${CMDLINE}; do
 	case "${token}" in
-		byteguru.target_disk=*) TARGET="${token#*=}" ;;
+		byteguru.target_disk=*) CFG_TARGET="${token#*=}" ;;
 	esac
 done
 
@@ -50,26 +91,26 @@ wait_for() {
 	return 1
 }
 
-if [ -n "$TARGET" ]; then
-	if ! wait_for "$TARGET"; then
-		say "BYTEGURU-INSTALL-FAIL: диск $TARGET не появился за 120 с"
+if [ -n "$CFG_TARGET" ]; then
+	if ! wait_for "$CFG_TARGET"; then
+		say "BYTEGURU-INSTALL-FAIL: диск $CFG_TARGET не появился за 120 с"
 		exit 1
 	fi
 else
 	for candidate in /dev/sda /dev/vda /dev/nvme0n1; do
-		wait_for "$candidate" 10 && { TARGET="$candidate"; break; }
+		wait_for "$candidate" 10 && { CFG_TARGET="$candidate"; break; }
 	done
-	[ -n "$TARGET" ] || { say "BYTEGURU-INSTALL-FAIL: подходящего диска нет"; exit 1; }
+	[ -n "$CFG_TARGET" ] || { say "BYTEGURU-INSTALL-FAIL: подходящего диска нет"; exit 1; }
 fi
 
 # Защита от самого очевидного выстрела в ногу: носитель, с которого мы
 # сейчас живые, устанавливать не может.
-if findmnt -n -o SOURCE --target /run/live/medium 2>/dev/null | grep -q "^${TARGET}"; then
-	say "BYTEGURU-INSTALL-FAIL: $TARGET — это live-носитель, а не целевой диск"
+if findmnt -n -o SOURCE --target /run/live/medium 2>/dev/null | grep -q "^${CFG_TARGET}"; then
+	say "BYTEGURU-INSTALL-FAIL: $CFG_TARGET — это live-носитель, а не целевой диск"
 	exit 1
 fi
 
-say "BYTEGURU-INSTALL: цель $TARGET"
+say "BYTEGURU-INSTALL: цель $CFG_TARGET (профиль $CFG_PROFILE)"
 
 if ! lsblk -J -b -o NAME,TYPE,SIZE,FSTYPE,LABEL,UUID,MOUNTPOINTS,MODEL,TRAN,PARTTYPENAME \
 		> /tmp/byteguru-lsblk.json 2>/dev/null; then
@@ -79,8 +120,8 @@ fi
 
 # План печатается до исполнения: если планировщик скажет «не могу», это
 # должно быть видно в логе, а не тонуть в коде исполнения.
-if ! bginstaller plan --disk-file /tmp/byteguru-lsblk.json --device "$TARGET" \
-		--boot uefi --profile kiosk > /tmp/byteguru-plan.txt 2>&1; then
+if ! bginstaller plan --disk-file /tmp/byteguru-lsblk.json --device "$CFG_TARGET" \
+		--boot uefi --profile "$CFG_PROFILE" > /tmp/byteguru-plan.txt 2>&1; then
 	say "BYTEGURU-INSTALL-FAIL: план не собрался"
 	tail -12 /tmp/byteguru-plan.txt | while read -r line; do say "  $line"; done
 	exit 1
@@ -89,13 +130,13 @@ fi
 # Пароль тестовой учётной записи. Файл, а не аргумент: в argv он был бы виден
 # всему, что работает в этой сессии, включая журнал.
 PASSWORD_FILE="$(mktemp)"
-printf 'byteguru\n' > "$PASSWORD_FILE"
+printf '%s\n' "$CFG_PASSWORD" > "$PASSWORD_FILE"
 chmod 600 "$PASSWORD_FILE"
 
-bginstaller apply --disk-file /tmp/byteguru-lsblk.json --device "$TARGET" \
-	--boot uefi --profile kiosk --apply --confirm-token ok \
-	--user guru --password-file "$PASSWORD_FILE" \
-	--hostname byteguru-vm --timezone Europe/Moscow --keyboard ru \
+bginstaller apply --disk-file /tmp/byteguru-lsblk.json --device "$CFG_TARGET" \
+	--boot uefi --profile "$CFG_PROFILE" --apply --confirm-token ok \
+	--user "$CFG_USER" --password-file "$PASSWORD_FILE" \
+	--hostname "$CFG_HOSTNAME" --timezone Europe/Moscow --keyboard ru \
 	> /tmp/byteguru-apply.txt 2>&1
 code=$?
 rm -f "$PASSWORD_FILE"
@@ -107,7 +148,7 @@ if [ $code -ne 0 ]; then
 	exit 1
 fi
 
-say "BYTEGURU-INSTALL-OK: система установлена на $TARGET"
+say "BYTEGURU-INSTALL-OK: система установлена на $CFG_TARGET"
 # Синхронизация обязательна: тест перезапускает QEMU по таймауту, и
 # несохранённый squashfs-кэш выглядел бы как «с диска не грузится».
 sync

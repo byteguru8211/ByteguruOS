@@ -49,7 +49,7 @@ lb config noauto \
 	--iso-application "ByteguruOS" \
 	--iso-preparer "ByteguruOS project" \
 	--iso-publisher "ByteguruOS project; https://github.com/byteguru8211/ByteguruOS" \
-	--bootappend-live "boot=live components hostname=byteguru username=byteguru" \
+	--bootappend-live "boot=live components hostname=byteguru username=byteguru console=tty0 console=ttyS0,115200" \
 	"$@"
 
 # --- Пояснения к «странным» решениям ---------------------------------------------
@@ -57,16 +57,24 @@ lb config noauto \
 # --archive-areas: в trixie зона несвободных прошивок называется
 # "non-free-firmware" (не "nonfree"), она обязательна для iwlwifi/amdgpu/rtw88.
 #
-# --debian-installer none: d-i нам не нужен. Установщик будет свой; сейчас
-# отдаём предпочтение ДОКУМЕНТИРОВАННОМУ РУЧНОМУ пути установки
-# (см. /usr/share/doc/byteguruos/INSTALL.txt в overlay), а не calamares.
-# calamares 3.3.14-1 в trixie СУЩЕСТВУЕТ (проверено по packages.debian.org), но
-# требует branding/module-конфига, Qt-зависимостей и ручного тестирования — это
-# больше риск, чем ценность на первом образе. Решение зафиксировано здесь, чтобы
-# его нельзя было потерять.
+# --debian-installer none: d-i нам не нужен. Установщик свой, он же и
+# graphical-инсталлятор образа: окно `bginstaller --gui` (значок
+# «Установить ByteguruOS» на live-столе, CLI — `bginstaller-gui`), плюс
+# документированный ручной путь в /usr/share/doc/byteguruos/INSTALL.txt.
+# calamares 3.3.14-1 в trixie существует, но требует branding-пакета,
+# Qt-зависимостей и отдельного тестирования каждого сценария — а свой
+# установщик у нас уже есть и покрыт тестами, так что чужой был бы вторым
+# источником истины о разметке.
+#
+# --bootappend-live ... console=tty0 console=ttyS0,115200: сообщения ядра и
+# systemd идут и на экран, и в последовательный порт. Экрану это не мешает
+# (последний console= становится /dev/console для init, tty0 остаётся
+# доступен), зато прогон образа в QEMU получает читаемый лог. Без него
+# «образ не загрузился» и «образ загрузился, но молчит» неразличимы, а
+# второй случай — ровно то, что ловит install-smoke-test.
 #
 # --apt-recommends false: иначе live-образ раздуется из-за recommends у
-# task-xfce-desktop и network-manager.
+# метапакетов рабочего стола и сетевых менеджеров.
 #
 # --cache false: воспроизводимость важнее скорости. Кэш стадий (cache/*.binary.tar)
 # в CI легко «отравляется» и потом часами отлаживается. Если сборка станет

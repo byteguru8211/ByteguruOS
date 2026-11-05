@@ -25,11 +25,11 @@ os-prober
 grub-efi-amd64
 grub-common
 grub2-common
-# BIOS-машины: plan() с --boot legacy вызывает grub-install --target=i386-pc,
-# и без этого пакета установка на BIOS-компьютер падала бы на шаге загрузчика,
-# испортив диск. Debconf-сид в config/preseed/byteguru-grub.seed объясняет
-# postinst'у, что в chroot ставить некуда.
-grub-pc
+# grub-pc сюда добавить нельзя, и это не экономия: он Conflicts с
+# grub-efi-amd64, и сборка образа падает на неразрешимой паре. Значит
+# live-образ умеет ставить только UEFI-загрузчик, а попытка --boot legacy
+# должна отказывать до первого прикосновения к диску — см. проверку в
+# bginstaller/operations.py.
 
 # --- файловые системы Windows / removable ---------------------------------------
 # ntfs3 собран в ядре/модулях (см. build/configs/kernel.defconfig), ntfs-3g —
