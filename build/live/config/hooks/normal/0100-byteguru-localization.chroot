@@ -62,10 +62,13 @@ fi
 mkdir -p /etc/systemd/system/multi-user.target.wants
 ln -sf /etc/systemd/system/byteguru-vboxsf.service \
 	/etc/systemd/system/multi-user.target.wants/byteguru-vboxsf.service
+ln -sf /etc/systemd/system/byteguru-live-check.service \
+	/etc/systemd/system/multi-user.target.wants/byteguru-live-check.service
 
 # --- права на sbin-хелперы ------------------------------------------------------
 chmod 0755 /usr/local/sbin/byteguru-boot-repair 2>/dev/null || true
 chmod 0755 /usr/local/sbin/byteguru-boot-status 2>/dev/null || true
 chmod 0755 /usr/local/bin/byteguru-vboxsf-mount 2>/dev/null || true
+chmod 0755 /usr/local/bin/byteguru-live-check 2>/dev/null || true
 
 exit 0
