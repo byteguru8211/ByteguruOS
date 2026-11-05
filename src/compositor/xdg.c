@@ -67,10 +67,10 @@ void bgwl_new_xdg_popup(struct wl_listener *listener, void *data) {
 
 	struct wlr_xdg_surface *parent = NULL;
 	if (xdg_popup->parent != NULL) {
-		/* ВЕРИФИЦИРОВАТЬ: every *_try_from_wlr_surface() helper in 0.19.3
-		 * dereferences its argument, so NULL parents must be filtered here.
-		 * Popups whose parent is a layer surface are handled by layer.c via
-		 * wlr_layer_surface_v1.events.new_popup instead. */
+		/* wlr_xdg_surface_try_from_wlr_surface() dereferences its argument,
+		 * so a popup without an xdg parent has to be filtered here. Popups
+		 * owned by a layer surface arrive through layer.c's new_popup
+		 * handler instead, which is why they are not an error below. */
 		parent = wlr_xdg_surface_try_from_wlr_surface(xdg_popup->parent);
 	}
 	if (parent == NULL) {

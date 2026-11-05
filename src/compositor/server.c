@@ -29,11 +29,10 @@
 #include "bgwl_config.h"
 
 /* The layer-shell global is bound at version 4: enough for the ByteguruOS
- * panel (exclusive zones, anchors, keyboard interactivity). 0.19.3 allows up
- * to ZWLR_LAYER_SHELL_V1_VERSION (5).
- * ВЕРИФИЦИРОВАТЬ: wlr_layer_shell_v1_create() asserts version <= the protocol
- * version in the vendored XML; check protocol/wlr-layer-shell-unstable-v1.xml
- * if the build warns at runtime. */
+ * panel (exclusive zones, anchors, keyboard interactivity). wlroots 0.18
+ * allows up to ZWLR_LAYER_SHELL_V1_VERSION (5); 4 is what gtk4-layer-shell
+ * actually drives, and this is the version the panel and the lock screen run
+ * against in a live session. */
 #define BGWL_LAYER_SHELL_VERSION 4
 /* xdg_wm_base version 3, matching tinywl: everything newer is optional for
  * the clients bgwl is expected to run in v0. */
@@ -244,8 +243,9 @@ static int handle_terminate(int signal_number, void *data) {
 
 static bool add_signal_handler(struct bgwl_server *server, int signal_number,
 		struct wl_event_source **source_out) {
-	/* ВЕРИФИЦИРОВАТЬ: wl_event_loop_add_signal(loop, int,
-	 * wl_event_loop_signal_func_t, void *) from <wayland-server-core.h>. */
+	/* wl_event_loop_add_signal() gives back a NULL only when the loop is
+	 * gone; a session without signal handlers would outlive Ctrl+C silently,
+	 * so this is treated as fatal. */
 	struct wl_event_source *source = wl_event_loop_add_signal(server->event_loop,
 		signal_number, handle_terminate, server);
 	if (source == NULL) {
@@ -347,9 +347,10 @@ bool bgwl_server_start(struct bgwl_server *server) {
 		return false;
 	}
 
-	/* ВЕРИФИЦИРОВАТЬ: wlr_compositor_create() argument order and the wl_compositor
-	 * version (5); also wlr_renderer_init_wl_display() is what advertises
-	 * wl_shm via wlr_shm_create_with_renderer(), so no second shm global here. */
+	/* wlr_renderer_init_wl_display() is what advertises wl_shm (through
+	 * wlr_shm_create_with_renderer()), so there is deliberately no second
+	 * shm global here — two globals for one interface split clients' buffer
+	 * allocation across them. */
 	wlr_compositor_create(server->wl_display, 5, server->renderer);
 	wlr_subcompositor_create(server->wl_display);
 	wlr_data_device_manager_create(server->wl_display);

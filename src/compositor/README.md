@@ -235,93 +235,71 @@ So the panel must call `zwlr_layer_surface_v1.set_namespace("bgwl-panel")`.
 
 ## Verification status
 
-Read this before trusting any line of code in this directory.
+This directory is built and run, so the notes below are about *what evidence
+exists*, not about what might break.
 
-* Written on Windows: no C compiler, no `make`, no meson, no wlroots — **the
-  code has never been compiled or run**.
-* What *was* done: `wlroots` 0.19.3 was cloned and every API call in these
-  sources was checked against that tree's headers
-  (`include/wlr/**/*.h`), its `tinywl/tinywl.c`, its
-  `examples/cairo-buffer.c`, its `types/scene/layer_shell_v1.c` and its
-  `backend/backend.c`. The wlroots version table above is from
-  packages.debian.org.
-* What was *not* verified: nothing has been through a preprocessor, linker or
-  runtime. `wl_event_loop_add_signal()` and `wl_event_loop_signal_func_t` come
-  from libwayland headers that are not present on this machine.
-* Every place that still needs a check against installed headers carries the
-  marker `/* ВЕРИФИЦИРОВАТЬ: ... */`. Reviewers should fix compile errors by
-  grepping that string first:
+* **Built**: meson + ninja against `libwlroots-0.18-dev` from Debian 13
+  (trixie). The tree compiles clean with `-Werror=implicit-function-declaration`,
+  `-Werror=incompatible-pointer-types` and `-Werror=return-type`, so a wrong
+  prototype is a build failure, not a runtime surprise.
+* **Run**: `bgwl -b headless` in the developer session and inside the live
+  image; the panel, palette, settings window, locker and notification daemon
+  all attach to it. Frames are captured with `grim` and read back as images —
+  that is how the amber titlebar, the ignored panel exclusive zone and the
+  half-opacity windows were found and fixed.
+* **Tested**: `tests/test_compositor_ctl.py` starts a real headless bgwl and
+  drives the control socket (state, workspace, send, focus, close, maximize,
+  fullscreen, lock), plus a client-mapping check that skips itself when no
+  Wayland client is installed.
+* **Booted**: the ISO is launched by `build/scripts/boot-smoke-test.sh`, and
+  `byteguru-live-check` inside the image reports `BYTEGURU-SESSION-OK` on the
+  console once the compositor socket and `bgctl status` answer.
 
-  ```sh
-  grep -rn "ВЕРИФИЦИРОВАТЬ" src/compositor/
-  ```
+Two things the code depends on that are easy to lose in a wlroots bump, both
+learned the hard way:
 
-Expected first-compile problems, most likely first:
-
-1. **meson**, not C: the runner image has no `wlroots-0.19.pc` (trixie ships
-   0.18) → `dependency('wlroots-0.19')` fails and the `error()` message fires.
-   Fix by changing the name or pinning sid.
-2. **Generated protocol headers not found.** wlroots' headers do
-   `#include "xdg-shell-protocol.h"`, which only resolves if the build
-   directory is on the include path. If the `-I@BUILD_DIR@` in `meson.build`
-   is not enough, add `include_directories: include_directories('.',
-   meson.current_build_dir())` — the same pattern upstream `protocol/meson.build`
-   uses.
-3. **`<wlr/interfaces/wlr_buffer.h>` / `<wlr/interfaces/wlr_keyboard.h>`**:
-   unstable headers used by `util.c` and `input.c`. Field names
-   (`destroy`, `begin_data_ptr_access`, `end_data_ptr_access`) match the
-   0.19.3 `examples/cairo-buffer.c`; re-check them if the pin moves.
-4. **`<linux/input-event-codes.h>`** — present on any Debian with
-   `linux-libc-dev`, but this is where `KEY_ENTER`/`KEY_D`/`KEY_Q`/`KEY_SPACE`
-   come from, so it is the first thing to look at if `input.c` fails.
-5. **`wlr_log` format specifiers** for `int32_t refresh` and
-   `(double) scale` — harmless on x86-64/aarch64, but `%d` for `int32_t` may
-   warn under `-Wformat` on 32-bit ARM.
-6. **Unused `data` parameters** in listener callbacks (`output_frame`,
-   `keyboard_handle_modifiers`, …). Only a problem if the top-level
-   `meson.build` adds `-Wextra -Werror`; `-Wall` alone does not warn.
-
-Things that were **checked and are not problems**, so reviewers do not redo
-them: the two-argument `wlr_output_commit_state()`, the seven-argument
-`wlr_seat_pointer_notify_axis()`, `wlr_output_layout_create(display)` and all
-other prototypes in the table above; `wlr_xdg_surface_*`/`wlr_xdg_toplevel_*`
-`try_from_wlr_surface()` helpers dereferencing NULL (guarded in `view.c` and
-`xdg.c`); `wlr_scene_output` being destroyed by the output addon rather than by
-us (`output.c`); the maximum protocol versions (`WM_BASE_VERSION` is 6, so
-binding xdg at 3 is fine; `LAYER_SHELL_VERSION` is 5, so binding layer-shell at
-4 is fine).
+1. `wlr_scene_layer_surface_v1_configure()` in 0.18 does **not** subtract the
+   usable area. Exclusive zones are applied by `layer.c` itself
+   (`apply_exclusive_zone`); trusting the helper gives a panel that renders
+   under the windows.
+2. Opacity is per-buffer, not per-node. A window fade animation cannot be
+   done by fading the scene graph, and half-faded windows are what an attempt
+   at it produced — `anim.c` therefore animates workspace slides only.
 
 ## Что НЕ реализовано
 
-Deliberately out of scope for v0 — not "not yet written", but excluded:
+Список после того, как композитор собран, запущен и проверён. Здесь только то,
+чего нет на самом деле; пункты вида «максимизации нет» уехали в историю.
 
-* **XWayland** — no `wlr_xwayland`, no X11 clients at all.
-* **Workspaces / virtual desktops** — no `ext-workspace`, no switching.
-* **Tiling or any window management policy** — windows float; nothing snaps,
-  cascades or tiles.
-* **Maximize and fullscreen** — the requests are answered with an empty
-  configure only, because xdg-shell requires a reply; the window does not
-  change.
-* **Animations**, transitions, compositor-side blur/shadow/rounded corners.
-* **DRM lease** (`wlr_drm_lease`) — no VR / passthrough.
-* **Screencopy / screen capture** (`wlr_screencopy`, ext-image-copy-capture).
-* **Input-method (`text-input-v3`, `input-method-v2`)**, on-screen keyboards,
-  IME.
-* **Explicit sync / fences** (`linux-drm-syncobj`) — deliberately not wired,
-  even though 0.19 supports it.
-* **Session restore**, per-monitor configuration persistence, `wlr-output-
-  management` (randr-like) protocol, output scale/transform/rotation controls.
-* **Window buttons** (close/minimise/maximise), resize borders, double-click to
-  maximise, alt-drag from anywhere.
-* **Binding configuration** — keybindings are compiled in; no config file, no
-  `wlr-keyboard-shortcuts-inhibit` handling.
-* **Touch, tablets, pen, keyboard groups, multiple seats** — only one `seat0`
-  with pointer + keyboard are handled; other device types are ignored.
-* **Primary selection / `wlr-data-control`**, drag-and-drop beyond what
-  `wl_data_device_manager` gives for free.
-* **Idle handling, power management, `ext-session-lock`**, PIP audio, session
-  bus integration.
-* **Panel logic** — bgwl only shows/hides a layer surface; layout, items, tray
-  and clock belong to the panel component.
-* **HiDPI** — `wlr_xcursor_manager_load()` is called with the output's scale,
-  but no scale factor is ever set, so everything renders at scale 1.
+Вне объёма намеренно:
+
+* **XWayland** — X11-клиентов нет. Самый большой функциональный пробел, и
+  он отложен осознанно: API 0.18 (`wlr/xwayland/server.h` + `shell.h`)
+  требует отдельного слоя decorations для x11-поверхностей, а ломать
+  проверенный сеанс ради него незачем.
+* **DRM lease** (`wlr_drm_lease`) — VR и passthrough не входят в задачу стола.
+* **Explicit sync / fences** (`linux-drm-syncobj`) — не подключено.
+* **Compositor-side blur / shadow / rounded corners** — это GPU-проход по
+  всему экрану каждый кадр. Акцент, рамка фокуса и кнопки рисуются в буфере
+  заголовка: стоит дороже в тексте, но дешевле в кадрах.
+* **Touch, планшеты, перо, несколько seats** — один `seat0` с указателем и
+  клавиатурой.
+
+Ещё не сделано, но входит в план:
+
+* **Протокол `wlr-output-power-management`** — XML-описания нет в wlroots
+  0.18, поэтому DPMS выполняется внутренним вызовом (`session.c`), и
+  «выключить монитор» извне пока нельзя.
+* **`ext-workspace`** — потоки есть, но собственные: клиент другой оболочки
+  их не видит.
+* **Сохранение конфигурации сеанса** — раскладка экранов после hotplug
+  живёт до выхода из bgwl.
+* **HiDPI целиком** — `fractional-scale`/`viewporter` и `output-management`
+  отдаются, но сеанс стартует с scale 1: менять масштаб должно окно настроек.
+
+Что в этом списке раньше числилось и **уже работает**: потоки
+(`workspace.c`), тайлинг и раскладки (`tiling.c`), настоящий maximize и
+fullscreen, кнопки и границы в заголовке, Alt+перетаскивание, конфиг-файл с
+комбинами клавиш, screencopy, `ext-session-lock`, idle с двухступенчатым
+отключением экрана, `wlr-data-control`, input/text-input и
+`security-context` для Flatpak.
