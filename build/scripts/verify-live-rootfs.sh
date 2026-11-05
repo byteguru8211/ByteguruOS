@@ -41,7 +41,8 @@ else
 	SHELL_FIELD="$(printf '%s' "${PASSWD_LINE}" | cut -d: -f7)"
 	if [ "${SHELL_FIELD}" != "/bin/bash" ]; then
 		# agetty --autologin не проходит через PAM-проверку shell, но bash
-		# нужен: именно .bash_profile запускает сеанс.
+		# нужен: сеанс запускает /etc/profile.d, а его читают только
+		# login-шеллы.
 		fail "shell пользователя — ${SHELL_FIELD}, а не /bin/bash"
 	fi
 fi
@@ -82,6 +83,21 @@ done
 if [ -z "${AUTOLOGIN_FOUND}" ]; then
 	fail "нет ни getty-автологина, ни lightdm-конфига: на tty1 будет приглашение входа"
 fi
+
+# Автологин без того, что поднимает сеанс, — это «образ завис на текстовой
+# консоли»: ровно так и было, и проверка выше этого не видела, потому что
+# drop-in стоял на месте. Здесь ровно то, без чего стола не будет.
+for file in \
+	etc/profile.d/90-byteguru-session.sh \
+	etc/byteguru/live-user \
+	usr/bin/bgwl-session \
+	usr/bin/bgwl; do
+	if [ -s "${CHROOT}/${file}" ]; then
+		note "- запуск сеанса: ${file}"
+	else
+		fail "нет ${file}: сеанс поднимать нечем"
+	fi
+done
 
 # Локаль и раскладка: печатаем содержимое, а не только вердикт. По одному
 # «не найдено» невозможно отличить не отработавший хук от файла, перезаписанного

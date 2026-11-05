@@ -86,8 +86,16 @@ if [ ! -s "$LOG" ]; then
 	die "серийный лог пуст: QEMU не запустился (код $rc)"
 fi
 
+# systemd печатает статус с ANSI-последовательностями, и в сыром логе строка
+# «Reached target graphical.target» разорвана управляющими кодами — grep по
+# сырому логу отвечает «нет» там, где цель достигнута. Проверки идут по
+# нормализованной копии, сырой лог остаётся для хвоста.
+NORMAL="$WORK/console.plain"
+sed -e 's/\x1b\[[0-9;?!]*[a-zA-Z]//g' -e 's/\x1b[^[(][0-9;]*[a-zA-Z]//g' \
+	-e 's/\r/\n/g' "$LOG" >"$NORMAL" 2>/dev/null || cp "$LOG" "$NORMAL"
+
 check() {
-	if grep -q "$1" "$LOG"; then
+	if grep -q "$1" "$NORMAL"; then
 		log "ok: $2"
 		return 0
 	fi
@@ -100,11 +108,11 @@ check "Linux version" "ядро стартовало" || fail=1
 check "Run /init as init process" "initrd передал управление live-boot" || fail=1
 check "Reached target graphical.target" "systemd довёл сеанс до графической цели" || fail=1
 
-if grep -q "BYTEGURU-SESSION-OK" "$LOG"; then
+if grep -q "BYTEGURU-SESSION-OK" "$NORMAL"; then
 	log "ok: сеанс подтверждён само-проверкой образа"
-elif grep -q "BYTEGURU-SESSION-FAIL" "$LOG"; then
+elif grep -q "BYTEGURU-SESSION-FAIL" "$NORMAL"; then
 	log "НЕТ: само-проверка сообщила о проблеме:"
-	grep "BYTEGURU-SESSION-FAIL" "$LOG" | sed 's/^/[boot-test]   /'
+	grep "BYTEGURU-SESSION-FAIL" "$NORMAL" | sed 's/^/[boot-test]   /'
 	fail=1
 else
 	log "НЕТ: само-проверка не вышла на консоль за ${TIMEOUT_SECONDS} с"
@@ -112,7 +120,7 @@ else
 fi
 
 for fatal in "Kernel panic" "Attempted to kill init" "VFS: Unable to mount root"; do
-	if grep -q "$fatal" "$LOG"; then
+	if grep -q "$fatal" "$NORMAL"; then
 		log "НЕТ: фатальное сообщение ядра: $fatal"
 		fail=1
 	fi
