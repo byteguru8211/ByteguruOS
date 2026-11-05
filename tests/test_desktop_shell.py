@@ -382,3 +382,39 @@ def test_every_launcher_is_installed_by_some_package():
         if script.is_file() and not script.name.endswith(".pyc")
         and f"usr/bin/{script.name}" not in installed)
     assert not missing, f"не указаны в debian/*.install: {missing}"
+
+
+# ------------------------------------------------------------------------ bgctl
+def _load_bgctl():
+    """bgctl — исполняемый файл без .py: spec сам его не распознаёт."""
+    import importlib.machinery
+    import importlib.util
+
+    path = Path(__file__).resolve().parent.parent / "bin" / "bgctl"
+    loader = importlib.machinery.SourceFileLoader("bgctl_module", str(path))
+    spec = importlib.util.spec_from_loader("bgctl_module", loader)
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)
+    return module
+
+
+def test_bgctl_json_flag_works_on_both_sides_of_the_subcommand():
+    """`bgctl --json status` обязан печатать JSON, а не текст.
+
+    argparse с parents+subparsers коварен: подкоманда переписывает значение
+    флага, указанное до неё. Без default=SUPPRESS флаг работал только в форме
+    `bgctl status --json`, то есть ровно наоборот тому, как его пишут в
+    скриптах.
+    """
+    bgctl = _load_bgctl()
+    parser = bgctl.build_parser()
+    assert bgctl._as_json(parser.parse_args(["--json", "status"])) is True
+    assert bgctl._as_json(parser.parse_args(["status", "--json"])) is True
+    assert bgctl._as_json(parser.parse_args(["status"])) is False
+
+
+def test_bgctl_exposes_run_action():
+    """Действия сеанса доступны и человеку, а не только палитре."""
+    bgctl = _load_bgctl()
+    args = bgctl.build_parser().parse_args(["run", "launcher"])
+    assert args.template == "run {}"

@@ -67,15 +67,20 @@ def print_state(snapshot: Snapshot, as_json: bool) -> int:
     return 0
 
 
+def _as_json(args) -> bool:
+    """Флаг --json может отсутствовать в namespace: default=SUPPRESS."""
+    return bool(getattr(args, "json", False))
+
+
 def cmd_status(args) -> int:
-    return print_state(Compositor().state(), args.json)
+    return print_state(Compositor().state(), _as_json(args))
 
 
 def cmd_command(args) -> int:
     line = " ".join(args.line)
     reply = Compositor().command(line)
     if reply.get("type") == "state":
-        return print_state(Snapshot.from_state(reply), args.json)
+        return print_state(Snapshot.from_state(reply), _as_json(args))
     print(json.dumps(reply, ensure_ascii=False))
     return 0
 
@@ -106,8 +111,11 @@ def cmd_events(args) -> int:
 def build_parser() -> argparse.ArgumentParser:
     # --json доступен и до подкоманды, и после неё: `bgctl status --json` —
     # то, что печатают в скриптах, и спорить с argparse об этом незачем.
+    # default=SUPPRESS обязателен: без него подкоманда записывает в namespace
+    # собственное False и перетирает флаг, указанный до неё, — `bgctl --json
+    # status` молча печатал текст вместо JSON.
     common = argparse.ArgumentParser(add_help=False)
-    common.add_argument("--json", action="store_true",
+    common.add_argument("--json", action="store_true", default=argparse.SUPPRESS,
         help="печатать состояние машиночитаемо")
 
     parser = argparse.ArgumentParser(prog="bgctl",
@@ -129,6 +137,10 @@ def build_parser() -> argparse.ArgumentParser:
         ("send", "перенести активное окно в поток", "send {}"),
         ("focus", "сфокусировать окно по id", "focus {}"),
         ("set", "изменить настройку: bgctl set gap-inner 10", "set {}"),
+        # Без этой подкоманды протокол «run …» был доступен только палитре,
+        # а документация обещала его и человеку тоже.
+        ("run", "выполнить действие сеанса: launcher, terminal, lock, screenshot",
+            "run {}"),
     ):
         child = sub.add_parser(name, parents=[common], help=help_text)
         child.add_argument("argument", nargs="+")
