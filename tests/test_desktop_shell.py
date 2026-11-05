@@ -554,3 +554,50 @@ def test_session_says_out_loud_when_there_is_no_screen(tmp_path):
     finally:
         listener.close()
     assert "ни одного экрана" in proc.stderr
+
+
+def test_compositor_is_started_without_an_inherited_display(tmp_path):
+    """Композитор не должен доставать WAYLAND_DISPLAY из сеанса.
+
+    Видя эту переменную, wlroots выбирает вложенный бэкенд вместо DRM, не
+    может подключиться и отдаёт пустой набор бэкендов — композитор доживает до
+    запасного headless-вывода. Наружу это выглядит как зависшая загрузка: сокет
+    есть, панель работает, экрана нет.
+    """
+    stubs = tmp_path / "stubs"
+    stubs.mkdir()
+    runtime = tmp_path / "run"
+    runtime.mkdir()
+    listener = socket.socket(socket.AF_UNIX)
+    listener.bind(str(runtime / "wayland-0"))
+    listener.listen(1)
+    seen = tmp_path / "compositor-env.txt"
+
+    # Единственная задача заглушки — записать, что ей передалось.
+    (stubs / "bgwl").write_text(
+        "#!/bin/sh\n"
+        f"printf '%s\\n' \"${{WAYLAND_DISPLAY:-нет}}\" > '{seen}'\n"
+        "sleep 3\n", encoding="utf-8")
+    (stubs / "bgctl").write_text(
+        "#!/bin/sh\n"
+        "printf '%s\\n' '{\"compositor\":\"bgwl\",\"outputs\":"
+        '[{"name":"DRM-1","headless":false}]}"\n', encoding="utf-8")
+    for stub in stubs.iterdir():
+        stub.chmod(0o755)
+
+    script = Path(__file__).resolve().parents[1] / "bin" / "bgwl-session"
+    env = dict(os.environ,
+        PATH=f"{stubs}:/usr/bin:/bin",
+        XDG_RUNTIME_DIR=str(runtime),
+        HOME=str(tmp_path),
+        XDG_STATE_HOME=str(tmp_path / "state"),
+        WAYLAND_DISPLAY="wayland-0",
+        BGWL_SESSION_SCREEN_TRIES="1")
+    try:
+        subprocess.run(["/bin/sh", str(script)], env=env,
+            capture_output=True, text=True, timeout=60,
+            stdin=subprocess.DEVNULL)
+    finally:
+        listener.close()
+
+    assert seen.read_text(encoding="utf-8").strip() == "нет"

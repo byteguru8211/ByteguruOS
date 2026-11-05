@@ -98,7 +98,17 @@ screens=$(printf '%s' "$status" | grep -c '"headless": *false')
 # «нарисовать некуда» — это отказ, а не успех.
 if [ "$screens" -eq 0 ]; then
 	say "BYTEGURU-SESSION-FAIL: композитор отвечает, но ни одного экрана у него нет"
-	say "BYTEGURU-SESSION-FAIL: вывод только headless — в ВМ нужен VMSVGA, на машине /dev/dri/card0"
+	# Дальше — то, чем этот отказ объясняется, а не повторяется. Разница
+	# «устройства нет» и «устройство есть, композитор его не взял» лечится
+	# по-разному, и без этих строк её не увидеть из headless-прогона.
+	cards="$(ls /dev/dri 2>/dev/null | tr '\n' ' ')"
+	say "BYTEGURU-SESSION-FAIL: /dev/dri: ${cards:-пусто — KMS-устройства нет}"
+	for log in "${HOME_DIR:-/home/$USER_NAME}/.local/state/byteguru/session.log"; do
+		if [ -f "$log" ]; then
+			say "BYTEGURU-SESSION-FAIL: последние строки $log:"
+			tail -14 "$log" 2>/dev/null | while read -r line; do say "  $line"; done
+		fi
+	done
 	exit 1
 fi
 
