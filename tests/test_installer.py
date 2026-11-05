@@ -549,3 +549,37 @@ def test_fat_labels_fit_eleven_characters():
         fs = args[args.index("--fs") + 1] if "--fs" in args else ""
         if fs in ("fat32", "exfat"):
             assert len(label) <= 11, f"метка {label!r} не влезет в FAT"
+
+
+# ------------------------------------------------------------------ окно установки
+def test_gui_module_imports_without_display():
+    """GTK импортируется lazily — иначе тесты окна требуют дисплея."""
+    from bginstaller.ui import installer as gui
+
+    assert gui.Gtk is None
+    assert callable(gui.build_window)
+
+
+def test_gui_hint_names_the_mode_that_would_work():
+    """Без подсказки «недостаточно места» читается как поломка установщика."""
+    from bginstaller.ui.installer import disk_free_hint
+
+    full = models.Disk(device="/dev/sda", size_bytes=24 * GiB,
+        table=PartitionTable.GPT,
+        partitions=(Partition(number=1, start_bytes=MiB, size_bytes=23 * GiB),))
+    assert "Стереть диск" in disk_free_hint(full)
+
+    small = models.Disk(device="/dev/sda", size_bytes=8 * GiB,
+        table=PartitionTable.GPT)
+    assert "мало" in disk_free_hint(small)
+
+
+def test_gui_detect_disks_survives_missing_lsblk(monkeypatch):
+    """На машине без lsblk окно не падает: список дисков просто пуст."""
+    from bginstaller.ui import installer as gui
+
+    def boom(*args, **kwargs):
+        raise OSError("lsblk не найден")
+
+    monkeypatch.setattr(gui.subprocess, "run", boom)
+    assert gui.detect_disks() == []
