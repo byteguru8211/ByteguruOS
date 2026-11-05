@@ -157,9 +157,24 @@ def test_legacy_boot_on_mbr_is_blocked():
         planner.plan(disk, boot_mode=BootMode.UEFI)
 
 
+def test_small_disk_scales_layout_instead_of_refusing():
+    """40 ГиБ — это VM и старые ноутбуки; отказывать им нельзя.
+
+    Раньше планировщик требовал ровно размеры профиля и отвечал «не хватает
+    места» там, где система помещается. Теперь разделы уменьшаются, но не
+    ниже минимума, при котором обновление не встанет.
+    """
+    install_plan = planner.plan(_disk(40, ()), profile=Profile.WORKSTATION)
+    layout = install_plan.layout
+    assert layout.root_bytes < planner.SIZINGS[Profile.WORKSTATION].root
+    assert layout.root_bytes >= planner.ROOT_FLOOR
+    assert layout.var_bytes >= planner.VAR_FLOOR
+    assert layout.total_new_bytes() <= 40 * GiB
+
+
 def test_tiny_disk_raises():
     with pytest.raises(PlanError):
-        planner.plan(_disk(40, ()), profile=Profile.WORKSTATION)
+        planner.plan(_disk(8, ()), profile=Profile.WORKSTATION)
 
 
 def test_erase_plan_starts_with_wipe_and_demands_token():
@@ -313,6 +328,27 @@ def test_clock_localtime_choice_is_respected():
 
 
 # -------------------------------------------------------------------------- apply
+def test_profile_follows_disk_size():
+    """Маленький диск не должен делать установку невозможной.
+
+    Профиль — это размеры разделов, а не ярлык: на 24 ГиБ помещается kiosk, и
+    отказ «недостаточно места» был бы багом установщика, а не диска.
+    """
+    assert planner.suggest_profile(_disk(24, ())) is Profile.KIOSK
+    assert planner.suggest_profile(_disk(120, ())) is Profile.SERVER
+    assert planner.suggest_profile(_disk(250, ())) is Profile.WORKSTATION
+    # Офисный профиль с огромным /var оправдан только ради WinCompat.
+    assert planner.suggest_profile(_disk(250, ()), windows_present=True) \
+        is Profile.OFFICE_DUALBOOT
+
+
+def test_small_disk_still_produces_a_plan():
+    install_plan = planner.plan(_disk(24, ()),
+        profile=planner.suggest_profile(_disk(24, ())))
+    kinds = [action.kind for action in install_plan.actions]
+    assert "create-partition" in kinds and "finalize" in kinds
+
+
 def test_dry_run_executes_nothing():
     disk = _disk(200, ())
     install_plan = planner.plan(disk)

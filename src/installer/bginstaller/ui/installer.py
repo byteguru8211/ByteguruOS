@@ -20,21 +20,78 @@ import os
 import subprocess
 import sys
 import threading
+import time
+from pathlib import Path
 
 from bginstaller import operations, probe
 from bginstaller.apply import apply_plan, confirm_token
 from bginstaller.errors import InstallerError, PlanError, ProbeError
 from bginstaller.models import BootMode, GiB, Profile, WindowsState
-from bginstaller.planner import plan, plan_erase_and_install
+from bginstaller.planner import (WINDOWS_MINIMUM, plan, plan_erase_and_install,
+    suggest_profile)
 
-try:
-    import gi
+Gtk = None
+GLib = None
+Gdk = None
 
-    gi.require_version("Gtk", "4.0")
-    from gi.repository import GLib, Gtk
-except (ImportError, ValueError):  # pragma: no cover — сборка без графического сеанса
-    gi = None
-    Gtk = None
+
+def _ensure_gtk(retries: int = 50) -> bool:
+    """Поднимает GTK после того, как сеанс действительно стал доступен.
+
+    Порядок здесь важен: PyGObject вычисляет флаг «Gtk инициализирован» один
+    раз — в момент импорта. Композитор запускает `-c` команду до того, как
+    закончить свою инициализацию, поэтому импорт при старте ловит гонку и
+    оставляет флаг False, а любое окно падает с «Gtk couldn't be
+    initialized». Ждём сокет и импортируем Gtk только после него.
+    """
+    global Gtk, GLib, Gdk
+    if Gtk is not None:
+        return True
+    if os.environ.get("WAYLAND_DISPLAY"):
+        # Переопределяем, а не «оставляем, если уже задано»: окружение сборки
+        # или чужой сеанс приносит GDK_BACKEND=x11, X-сервера в образе нет, и
+        # GTK молча не инициализируется — окно установщика не появляется.
+        os.environ["GDK_BACKEND"] = "wayland"
+    runtime = Path(os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}")
+    display = os.environ.get("WAYLAND_DISPLAY", "wayland-0")
+    for _ in range(retries):
+        if (runtime / display).exists():
+            break
+        time.sleep(0.1)
+    else:
+        return False
+    try:
+        import gi
+
+        gi.require_version("Gtk", "4.0")
+        from gi.repository import Gdk, GLib, Gtk  # noqa: F401
+    except (ImportError, ValueError):  # pragma: no cover — сборка без GTK
+        return False
+    globals().update({"Gtk": Gtk, "GLib": GLib, "Gdk": Gdk})
+    return True
+
+
+def apply_theme() -> None:
+    """Тёмное оформление до первого кадра.
+
+    Установщик — часть рабочего стола: светлое окно посреди тёмного сеанса
+    выглядит как сломанная тема, а не как отдельная программа. Готовый CSS
+    генерирует оболочка в ~/.config/byteguru/theme.css; если файла ещё нет
+    (установщик запустили до первого входа), просим тёмный режим у Adwaita.
+    """
+    settings = Gtk.Settings.get_default()
+    if settings is not None:
+        settings.set_property("gtk-application-prefer-dark-theme", True)
+    config = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config")
+    css = config / "byteguru" / "theme.css"
+    if not css.exists():
+        return
+    provider = Gtk.CssProvider()
+    provider.load_from_path(str(css))
+    display = Gdk.Display.get_default()
+    if display is not None:
+        Gtk.StyleContext.add_provider_for_display(display, provider,
+            Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
 
 STEPS = ("язык", "диск", "пользователь", "план", "установка", "готово")
 
@@ -70,6 +127,7 @@ class Installer:
         self.disks = detect_disks()
         self.context = operations.Context()
         self.erase = False
+        self.profile = None
         self.install_plan = None
         self.report = None
         self.worker: threading.Thread | None = None
@@ -216,6 +274,10 @@ class Installer:
             xalign=0.0)
         self.plan_text.set_wrap(True)
         box.append(self.plan_text)
+
+        self.profile_label = Gtk.Label(label="", xalign=0.0)
+        self.profile_label.add_css_class("dim-label")
+        box.append(self.profile_label)
 
         self.commands = Gtk.TextView()
         self.commands.set_editable(False)
@@ -365,22 +427,41 @@ class Installer:
             self.plan_text.set_text("Выберите диск — здесь появится план.")
             self._set_commands("")
             return
+        # Профиль выбирает диск, а не меню: на 24 ГиБ «рабочая станция» не
+        # помещается, и отказывать в установке из-за этого — баг установщика.
+        has_windows = any(part.holds_windows for part in disk.partitions)
+        shrinkable = max((part.size_bytes - WINDOWS_MINIMUM for part
+            in disk.partitions if part.holds_windows), default=0)
+        try:
+            self.profile = suggest_profile(disk, windows_present=has_windows,
+                shrinkable_bytes=shrinkable)
+        except PlanError as exc:
+            self.install_plan = None
+            self.profile_label.set_text("")
+            self.token.set_visible(False)
+            self.plan_text.set_text(str(exc))
+            self._set_commands(disk_free_hint(disk))
+            self.forward.set_sensitive(False)
+            return
+        self.profile_label.set_text(
+            f"профиль: {self.profile.value} — подобран по размеру диска")
         try:
             if self.mode_erase.get_active():
                 self.install_plan = plan_erase_and_install(disk,
-                    profile=Profile.WORKSTATION, boot_mode=BootMode.UEFI)
+                    profile=self.profile, boot_mode=BootMode.UEFI)
             else:
                 self.install_plan = plan(disk,
-                    windows=WindowsState(present=any(
-                        part.holds_windows for part in disk.partitions)),
-                    profile=Profile.WORKSTATION, boot_mode=BootMode.UEFI)
+                    windows=WindowsState(present=has_windows),
+                    profile=self.profile, boot_mode=BootMode.UEFI)
         except (PlanError, InstallerError) as exc:
             self.install_plan = None
             self.plan_text.set_text(f"установка на {disk.device} невозможна: {exc}")
-            self._set_commands("")
+            self._set_commands(disk_free_hint(disk))
+            self.token.set_visible(False)
             self.forward.set_sensitive(False)
             return
 
+        self.token.set_visible(self.install_plan.requires_user_confirmation())
         layout = self.install_plan.layout
         self.plan_text.set_text(
             f"{disk.device}: корень {layout.root_bytes // GiB} ГиБ, "
@@ -506,24 +587,40 @@ class Installer:
             self.status.set_text("не удалось получить права администратора")
 
 
-def operations_write(path: str, content: str) -> None:
-    from pathlib import Path  # noqa: PLC0415 — только на записи файла
+def disk_free_hint(disk) -> str:
+    """Что написать под списком команд, когда план не собрался.
 
+    «Недостаточно места» без подсказки пользователь читает как «установщик
+    сломался», хотя обычно диск просто занят целиком — и выход (режим
+    «стереть диск») находится в двух кликах выше.
+    """
+    free = disk.total_free_bytes() // GiB
+    if disk.partitions and free < 1:
+        return ("свободного места нет: весь диск занят разделами. Выберите "
+            "режим «Стереть диск целиком» — так установка станет возможной")
+    return f"свободно {free} ГиБ — этого мало для любого профиля"
+
+
+def operations_write(path: str, content: str) -> None:
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(content, encoding="utf-8")
 
 
 def build_window(application) -> Gtk.Widget:
+    apply_theme()
     installer = Installer(application)
     installer.window.present()
     return installer.window
 
 
 def main(argv: list[str] | None = None) -> int:
-    if gi is None:  # pragma: no cover — без GTK окно не собрать
-        print("для графического установщика нужны python3-gi и GTK 4",
-            file=sys.stderr)
+    # Сообщение вместо traceback: «Gtk couldn't be initialized» при запуске по
+    # ssh или без сеанса выглядит как сломанный установщик, а не как отсутствие
+    # графического сеанса.
+    if not _ensure_gtk():
+        print("нет графического сеанса: окно установщика не откроется, "
+            "воспользуйтесь bginstaller plan/apply", file=sys.stderr)
         return 2
     application = Gtk.Application(application_id="ru.byteguru.installer")
     application.connect("activate", lambda app: build_window(app))

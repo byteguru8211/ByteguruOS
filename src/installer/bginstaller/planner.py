@@ -35,6 +35,14 @@ HOME_FLOOR = 10 * GiB           # меньший /home профильные кэ
 MIN_USABLE_GAP = 1 * GiB        # промежуток меньше непригоден: наш минимальный раздел больше
 SHRINK_STEP = 4 * GiB           # шаг подбора величины сжатия
 
+# Ниже этих размеров система не остаётся системой: root без места под кэш
+# пакетов и var без запаса на журналы ломаются не установкой, а первым же
+# обновлением. Минимумы выбраны так, чтобы 24-ГиБ диск (типичная виртуалка)
+# проходил с запасом, а не впритык на один МиБ.
+ROOT_FLOOR = 10 * GiB
+VAR_FLOOR = 6 * GiB
+SWAP_FLOOR = 1 * GiB
+
 
 @dataclass(frozen=True)
 class Sizing:
@@ -46,6 +54,11 @@ class Sizing:
     swap: int
     shared: int
     create_shared: bool = True
+
+    def total_fixed(self) -> int:
+        """Сколько нужно места до первого байта данных."""
+        return (self.root + self.var + self.home_min + self.swap
+            + (self.shared if self.create_shared else 0))
 
 
 SIZINGS: dict[Profile, Sizing] = {
@@ -59,6 +72,81 @@ SIZINGS: dict[Profile, Sizing] = {
 
 def gib(value: int) -> int:
     return int(value // GiB)
+
+
+def _fit_sizing(sizing: Sizing, room: int, esp_cost: int) -> Sizing | None:
+    """Уменьшает профиль под доступное место; None — если не влезает даже минимум.
+
+    Порядок жертв не случайен: сначала отдаётся общий том для обмена с Windows
+    (его отсутствие система заметит меньше всего), затем /home (данные можно
+    держать и на другом диске), и только потом пропорционально урезаются
+    системные разделы — но не ниже минимального размера, иначе установка
+    кончается не установкой, а «не хватило места при обновлении» через месяц.
+    """
+    if sizing.total_fixed() + esp_cost <= room:
+        return sizing
+
+    trimmed = replace(sizing, create_shared=False, shared=0)
+    if trimmed.total_fixed() + esp_cost <= room:
+        return trimmed
+
+    trimmed = replace(trimmed, home_min=0)
+    if trimmed.total_fixed() + esp_cost <= room:
+        return trimmed
+
+    need = trimmed.root + trimmed.var + trimmed.swap
+    available = room - esp_cost - trimmed.home_min
+    if available < ROOT_FLOOR + VAR_FLOOR + SWAP_FLOOR:
+        return None
+    scale = available / need
+
+    def scaled(value: int, floor: int) -> int:
+        # Пропорциональное уменьшение не имеет права уводить раздел под пол:
+        # root меньше ROOT_FLOOR — это «не хватило места» при первом же
+        # обновлении, то есть ровно тот сценарий, ради которого профиль урезали.
+        return max(floor, int(value * scale) // MiB * MiB)
+
+    fitted = Sizing(
+        root=scaled(trimmed.root, ROOT_FLOOR),
+        var=scaled(trimmed.var, VAR_FLOOR),
+        home_min=0,
+        swap=scaled(trimmed.swap, SWAP_FLOOR),
+        shared=0,
+        create_shared=False,
+    )
+    if fitted.root + fitted.var + fitted.swap + esp_cost > room:
+        return None
+    return fitted
+
+
+def minimum_room() -> int:
+    """Минимум, ниже которого установка невозможна ни при каком профиле."""
+    return ROOT_FLOOR + VAR_FLOOR + SWAP_FLOOR + 1 * GiB
+
+
+def suggest_profile(disk: Disk, *, windows_present: bool = False,
+        shrinkable_bytes: int = 0) -> Profile:
+    """Крупнейший профиль, который влезает на диск.
+
+    Без этого установка на 24-ГиБ диск (виртуалка, нетбук, флешка) запрещена с
+    сообщением «недостаточно места», хотя места ровно достаточно для рабочей
+    системы. Профиль — не гороскоп: его выбирает диск.
+
+    Офисный профиль с огромным /var нужен только ради окружений WinCompat; на
+    машине без Windows он съел бы место, которое пользователь отдаёт данным.
+    """
+    room = disk.total_free_bytes() + shrinkable_bytes
+    if room < minimum_room():
+        raise PlanError(
+            f"диска {gib(disk.size_bytes)} ГиБ мало: нужно не меньше "
+            f"{gib(minimum_room())} ГиБ свободного места")
+    candidates = [Profile.WORKSTATION, Profile.SERVER, Profile.KIOSK]
+    if windows_present:
+        candidates.insert(0, Profile.OFFICE_DUALBOOT)
+    for profile in candidates:
+        if SIZINGS[profile].total_fixed() + MIN_ESP_BYTES <= room:
+            return profile
+    return Profile.KIOSK
 
 
 def partition_node(disk: Disk, part: Partition) -> str:
@@ -148,15 +236,6 @@ def _allocate(disk: Disk, windows: WindowsState, sizing: Sizing, boot_mode: Boot
     esp = disk.esp
     reuse_esp = esp is not None and esp.size_bytes >= MIN_ESP_BYTES and boot_mode is BootMode.UEFI
     esp_cost = 0 if reuse_esp else (_esp_bytes(disk) if boot_mode is BootMode.UEFI else 0)
-    home_floor = max(sizing.home_min, HOME_FLOOR) if sizing.home_min else 0
-
-    base_items = [
-        ("root", sizing.root),
-        ("var", sizing.var),
-        ("swap", sizing.swap),
-        ("shared", sizing.shared if sizing.create_shared else 0),
-        ("home", home_floor),
-    ]
 
     room = 0
     if windows.present:
@@ -166,19 +245,35 @@ def _allocate(disk: Disk, windows: WindowsState, sizing: Sizing, boot_mode: Boot
         except PlanError:
             room = 0
 
+    def items_for(current: Sizing) -> list[tuple[str, int]]:
+        floor = max(current.home_min, HOME_FLOOR) if current.home_min else 0
+        return [
+            ("root", current.root),
+            ("var", current.var),
+            ("swap", current.swap),
+            ("shared", current.shared if current.create_shared else 0),
+            ("home", floor),
+        ]
+
     shrink = 0
     while True:
         segments = _segments_after_shrink(disk, windows, shrink)
-        result = _place(segments, _items(base_items, esp_cost))
+        free = sum(length for _start, length in segments)
+        result = _place(segments, _items(items_for(sizing), esp_cost))
         if result is not None:
             break
         if not windows.present:
-            raise PlanError(
-                f"не хватает непрерывного места под раскладку профиля;"
-                f" свободно {gib(sum(length for _s, length in segments))} ГиБ,"
-                f" требуется {gib(sum(size for _name, size in _items(base_items, esp_cost)))} ГиБ"
-                " и соседней Windows для сжатия нет"
-            )
+            # Места не хватает — уменьшаем сами разделы, а не отказываем:
+            # «недостаточно места» на машине, где система помещается, это баг
+            # планировщика, а не диска.
+            fitted = _fit_sizing(sizing, free, esp_cost)
+            if fitted is None:
+                raise PlanError(
+                    f"не хватает места: свободно {gib(free)} ГиБ, нужно не"
+                    f" меньше {gib(minimum_room())} ГиБ"
+                )
+            sizing = fitted
+            continue
         if shrink + SHRINK_STEP > room:
             raise PlanError(
                 f"даже при сжатии Windows до {gib(WINDOWS_MINIMUM)} ГиБ непрерывного места не хватает"
@@ -187,6 +282,9 @@ def _allocate(disk: Disk, windows: WindowsState, sizing: Sizing, boot_mode: Boot
 
     placed, leftover = result
     home_extra = max((length for _start, length in leftover), default=0)
+    # sizing мог быть уменьшен под размер диска; /home растёт из остатка только
+    # у профилей, где он вообще предусмотрен.
+    home_floor = max(sizing.home_min, HOME_FLOOR) if sizing.home_min else 0
     home_bytes = (home_floor + home_extra) if sizing.home_min else 0
 
     return Layout(
@@ -396,9 +494,13 @@ def plan_erase_and_install(disk: Disk, *, profile: Profile, boot_mode: BootMode 
     sizing = SIZINGS[profile]
     esp_cost = _esp_bytes(clean) if boot_mode is BootMode.UEFI else 0
     usable = clean.size_bytes - esp_cost - TAIL_RESERVE - clean.first_usable(TAIL_RESERVE)
+    fitted = _fit_sizing(sizing, usable + esp_cost, esp_cost)
+    if fitted is None:
+        raise PlanError(
+            f"диска {gib(disk.size_bytes)} ГиБ мало: нужно не меньше"
+            f" {gib(minimum_room() + esp_cost)} ГиБ")
+    sizing = fitted
     fixed = sizing.root + sizing.var + sizing.swap + (sizing.shared if sizing.create_shared else 0)
-    if usable < fixed + max(sizing.home_min, HOME_FLOOR if sizing.home_min else 0):
-        raise PlanError(f"диск {gib(disk.size_bytes)} ГиБ слишком мал для профиля {profile.value}")
     home_bytes = usable - fixed if sizing.home_min else 0
     layout = Layout(
         root_bytes=sizing.root,
