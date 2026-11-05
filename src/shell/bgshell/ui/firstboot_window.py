@@ -96,6 +96,9 @@ def build_window(application, facts: firstboot.SystemFacts | None = None) -> obj
     status.add_css_class("notice")
     status.set_wrap(True)
     status.set_xalign(0.0)
+    # Пустая плашка с фоном выглядит как испорченный прогресс-бар, поэтому
+    # статус показывается только когда сказать нечего — точнее, когда есть что.
+    status.set_visible(False)
     root.append(status)
 
     footer = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
@@ -158,8 +161,26 @@ def build_window(application, facts: firstboot.SystemFacts | None = None) -> obj
     return window
 
 
+def _say(status, text: str) -> None:
+    """Статусная строка видна только когда в ней есть текст.
+
+    Форматирование `.notice` рисует плашку с фоном даже у пустой подписи, и
+    мастер показывал её как тёмную полосу под заголовком.
+    """
+    _say(status, text)
+    status.set_visible(bool(text))
+
+
 def _prompt_widget(wizard, prompt, status) -> object:
     Gtk = bggui.Gtk
+    # Заметка — это текст, а не вопрос: виджета ответа у неё нет, и рисовать
+    # к ней переключатель значит обещать настройку, которой не существует.
+    if prompt.kind == "note":
+        note = Gtk.Label(label=prompt.text)
+        note.set_xalign(0.0)
+        note.set_wrap(True)
+        return note
+
     row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
     label = Gtk.Label(label=prompt.text)
     label.set_xalign(0.0)
@@ -170,9 +191,9 @@ def _prompt_widget(wizard, prompt, status) -> object:
     def commit(value) -> None:
         try:
             wizard.answer(prompt.key, value)
-            status.set_text(f"отмечено: {prompt.key} = {value}")
+            _say(status, f"отмечено: {prompt.key} = {value}")
         except WizardError as exc:
-            status.set_text(str(exc))
+            _say(status, str(exc))
 
     if prompt.kind == "bool":
         switch = Gtk.Switch()
@@ -222,7 +243,7 @@ def apply_answers(session, wizard: firstboot.Wizard, status) -> None:
         text += "; пропущено: " + ", ".join(skipped)
     if wizard.requires_reboot():
         text += "; часть вступит в силу после перезагрузки"
-    status.set_text(text)
+    _say(status, text)
 
 
 def main() -> int:

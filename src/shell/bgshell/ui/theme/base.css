@@ -116,9 +116,13 @@ window.background,
   font-size: 9pt;
 }
 
+/* Цвета берутся из палитры, а не из литералов: «жёлтая плашка на белом»
+   в тёмном столе превращается в грязно-оливковую полосу, которая к тому же
+   рисуется, когда текст статусной строки пуст. */
 .notice {
-  color: #7a5b00;
-  background: #fff4d6;
+  color: @window_fg_color;
+  background-color: @bg_soft;
+  border: 1px solid @bg_border;
   border-radius: 8px;
   padding: 6px 10px;
 }
