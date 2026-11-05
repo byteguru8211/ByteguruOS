@@ -67,9 +67,11 @@ umount "$MNT"
 APPEND="boot=live components hostname=byteguru username=byteguru console=ttyS0,115200"
 
 log "запуск QEMU (до ${TIMEOUT_SECONDS} с), лог: $LOG"
-# q35 вместо i440FX: на i440FX под TCG ядро периодически паникует
-# «IO-APIC + timer doesn't work» — с тем же образом прогон то проходил, то
-# падал на первой же секунде. Нестабильный тест хуже отсутствующего.
+# q35 вместо i440FX: на i440FX ядро паникует «IO-APIC + timer doesn't work»
+# устойчиво. С q35 та же паника осталась, но только когда хост загружен сборкой
+# одновременно с прогоном: под TCG таймеры гостя зависят от того, успевают ли
+# его потоки на CPU. Отсюда правило — прогон не запускают параллельно со
+# сборкой, а тест обязан это заметить, а не молча досидеть до таймаута.
 timeout --signal=SIGKILL "$TIMEOUT_SECONDS" qemu-system-x86_64 \
 	-machine q35,accel=kvm:tcg -cpu max -smp 2 -m "$MEMORY_MB" \
 	-vga std -display none -no-reboot -no-shutdown \
@@ -78,7 +80,25 @@ timeout --signal=SIGKILL "$TIMEOUT_SECONDS" qemu-system-x86_64 \
 	-append "$APPEND" \
 	-serial "file:$LOG" -monitor none \
 	-netdev user,id=n0 -device virtio-net-pci,netdev=n0 \
-	>"$WORK/qemu.out" 2>&1
+	>"$WORK/qemu.out" 2>&1 &
+qemu_pid=$!
+
+# Ждём не весь таймаут, а до первого вердикта. Само-проверка образа сама
+# говорит «OK» или «FAIL», и ждать после неё ещё полчаса — значит сделать
+# самый медленный шаг CI ещё и бесполезным. Паника ядра прерывает прогон по
+# той же причине: она не разрешится сама.
+deadline=$(( $(date +%s) + TIMEOUT_SECONDS ))
+while [ "$(date +%s)" -lt "$deadline" ]; do
+	if ! kill -0 "$qemu_pid" 2>/dev/null; then
+		break
+	fi
+	if grep -qaE "BYTEGURU-SESSION-(OK|FAIL)|Kernel panic|VFS: Unable to mount root" "$LOG" 2>/dev/null; then
+		kill "$qemu_pid" 2>/dev/null
+		break
+	fi
+	sleep 5
+done
+wait "$qemu_pid" 2>/dev/null
 rc=$?
 
 if [ ! -s "$LOG" ]; then
