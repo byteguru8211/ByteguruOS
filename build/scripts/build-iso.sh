@@ -38,6 +38,21 @@ for _var in http_proxy https_proxy ftp_proxy all_proxy HTTP_PROXY HTTPS_PROXY FT
 done
 export DEBIAN_FRONTEND=noninteractive
 
+# --- сетевые таймауты ----------------------------------------------------------
+# live-build сам скачивает индексы Contents (стадия chroot_firmware) через
+# wget, и у этого wget таймаута нет: на одной сборке соединение с зеркалом
+# «замёрзло» на 26 минутах без единого байта, и сборка стояла молча.
+# apt от такого защищён Acquire::Retries, wget — нет, поэтому задаём ему
+# WGETRC: таймаут и повторные попытки вместо вечного ожидания.
+WGETRC_FILE="${TMPDIR:-/tmp}/byteguru-wgetrc.$$"
+cat > "${WGETRC_FILE}" <<'WGETRC'
+timeout = 60
+tries = 5
+continue = on
+WGETRC
+export WGETRC="${WGETRC_FILE}"
+trap 'rm -f "${WGETRC_FILE}"' EXIT
+
 # --- пути ----------------------------------------------------------------------------
 SCRIPT_PATH="$(readlink -f "${BASH_SOURCE[0]}")"
 SCRIPT_DIR="$(dirname "${SCRIPT_PATH}")"
@@ -182,7 +197,9 @@ require_cmd() {
         syslinux-common syslinux-utils curl git binutils dpkg-dev rsync"
 }
 
-for c in lb debootstrap xorriso losetup mksquashfs awk sed grep curl rsync find; do
+# rsync из списка убран: overlay копируется cp -a (см. sync_overlay), а
+# обязательный, но неиспользуемый инструмент — это лишенняя зависимость сборки.
+for c in lb debootstrap xorriso losetup mksquashfs awk sed grep curl find; do
 	require_cmd "${c}"
 done
 
