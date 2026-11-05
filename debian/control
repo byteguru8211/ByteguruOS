@@ -20,8 +20,13 @@ Rules-Requires-Root: no
 
 Package: byteguru-compositor
 Architecture: any
+# libgl1-mesa-dri — не «на всякий случай». Без DRI-драйверов GBM не может
+# выделить буфер, DRM-бэкенд wlroots не поднимается, и композитор уходит на
+# запасной headless-вывод: сеанс живёт, сокет отвечает, а на мониторе остаётся
+# текстовая консоль. swrast_dri.so из этого пакета рисует программно, поэтому
+# стол появляется и на виртуальном адаптере без 3D.
 Depends: ${shlibs:Depends}, ${misc:Depends}, libwlroots-0.18, xkb-data,
- wl-clipboard, grim, slurp
+ libgl1-mesa-dri, wl-clipboard, grim, slurp
 Description: Wayland compositor for ByteguruOS (bgwl)
  wlroots-based session compositor: streams (workspaces) with per-stream
  accents, tile/even/floating layouts, real maximise and fullscreen,
