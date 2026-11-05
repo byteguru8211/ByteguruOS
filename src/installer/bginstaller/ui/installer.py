@@ -93,17 +93,11 @@ def apply_theme() -> None:
         Gtk.StyleContext.add_provider_for_display(display, provider,
             Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
 
-STEPS = ("язык", "диск", "пользователь", "план", "установка", "готово")
-
 LANGUAGES = (("Русский", "ru_RU.UTF-8"), ("English", "en_US.UTF-8"))
 KEYBOARDS = (("Русская + английская", "ru,us"), ("Только английская", "us"),
     ("Украинская + английская", "ua,us"))
 TIMEZONES = ("Europe/Moscow", "Europe/Kyiv", "Europe/Berlin", "Asia/Almaty",
     "Asia/Tashkent", "America/New_York", "UTC")
-
-
-def _gtk():
-    return Gtk
 
 
 def detect_disks() -> list:
@@ -126,12 +120,10 @@ class Installer:
         self.application = application
         self.disks = detect_disks()
         self.context = operations.Context()
-        self.erase = False
         self.profile = None
         self.install_plan = None
         self.report = None
         self.worker: threading.Thread | None = None
-        self.log_lines: list[str] = []
 
         self.window = Gtk.ApplicationWindow(application=application)
         self.window.set_title("Установка ByteguruOS")
@@ -543,7 +535,6 @@ class Installer:
         GLib.idle_add(self._finish_install, report)
 
     def _log(self, line: str) -> None:
-        self.log_lines.append(line)
         GLib.idle_add(self._append_log, line)
 
     def _append_log(self, line: str) -> bool:
