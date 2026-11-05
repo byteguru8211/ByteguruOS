@@ -601,3 +601,51 @@ def test_compositor_is_started_without_an_inherited_display(tmp_path):
         listener.close()
 
     assert seen.read_text(encoding="utf-8").strip() == "нет"
+
+
+def test_failed_session_leaves_the_reason_on_screen(tmp_path):
+    """Упавший сеанс обязан остаться читаемым, а не очистить экран.
+
+    Выход из сеанса перезапускает getty: консоль очищается, объяснение уезжает
+    за неё, и человек видит «зависло». Поэтому bgwl-session печатает журнал и
+    остаётся в оболочке — стол можно поднять отсюда же.
+    """
+    stubs = tmp_path / "stubs"
+    stubs.mkdir()
+    runtime = tmp_path / "run"
+    runtime.mkdir()
+    listener = socket.socket(socket.AF_UNIX)
+    listener.bind(str(runtime / "wayland-0"))
+    listener.listen(1)
+
+    # Композитор живёт ровно столько, чтобы сокет был «его», и умирает с кодом.
+    (stubs / "bgwl").write_text(
+        "#!/bin/sh\n"
+        f"echo 'DRI2: failed to create screen' >> '{tmp_path}/state/byteguru/session.log'\n"
+        "exit 3\n", encoding="utf-8")
+    (stubs / "bgctl").write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+    (stubs / "bash").write_text("#!/bin/sh\necho '<остались в оболочке>'\n",
+        encoding="utf-8")
+    state = tmp_path / "state" / "byteguru"
+    state.mkdir(parents=True)
+    for stub in stubs.iterdir():
+        stub.chmod(0o755)
+
+    script = Path(__file__).resolve().parents[1] / "bin" / "bgwl-session"
+    env = dict(os.environ,
+        PATH=f"{stubs}:/usr/bin:/bin",
+        XDG_RUNTIME_DIR=str(runtime),
+        HOME=str(tmp_path),
+        XDG_STATE_HOME=str(tmp_path / "state"),
+        WAYLAND_DISPLAY="wayland-0",
+        BGWL_SESSION_SCREEN_TRIES="1")
+    try:
+        proc = subprocess.run(["/bin/sh", str(script)], env=env,
+            capture_output=True, text=True, timeout=60,
+            stdin=subprocess.DEVNULL)
+    finally:
+        listener.close()
+
+    assert "сеанс не поднялся (код 3)" in proc.stderr
+    assert "failed to create screen" in proc.stderr
+    assert "<остались в оболочке>" in proc.stdout

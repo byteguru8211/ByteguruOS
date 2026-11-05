@@ -18,6 +18,7 @@
 #include <wlr/backend/headless.h>
 #include <wlr/backend/multi.h>
 #include <wlr/render/allocator.h>
+#include <wlr/render/pixman.h>
 #include <wlr/render/wlr_renderer.h>
 #include <wlr/types/wlr_compositor.h>
 #include <wlr/types/wlr_data_device.h>
@@ -320,6 +321,36 @@ void bgwl_server_init(struct bgwl_server *server) {
 	init_server_listeners(server);
 }
 
+/* Renderer, in the order of "what this machine can actually give us".
+ *
+ * A KMS device with no Mesa driver of its own (VirtualBox, Hyper-V, a GPU the
+ * kernel drives but Mesa does not) fails before wlroots picks a renderer: GBM
+ * cannot create a screen, EGL returns EGL_NOT_INITIALIZED, and there is
+ * nothing to draw with. Mesa can be told to use its software KMS driver by
+ * name; where even that is unavailable, pixman needs no GL at all.
+ *
+ * Each step costs frames per second, never the desktop — and "no desktop" is
+ * exactly what a black text console looked like.
+ */
+static struct wlr_renderer *create_renderer(struct bgwl_server *server) {
+	struct wlr_renderer *renderer = wlr_renderer_autocreate(server->backend);
+	if (renderer != NULL) {
+		return renderer;
+	}
+
+	if (setenv("MESA_LOADER_DRIVER_OVERRIDE", "kms_swrast", 1) == 0) {
+		wlr_log(WLR_INFO, "no GL renderer: retrying with Mesa's software "
+			"KMS driver (kms_swrast)");
+		renderer = wlr_renderer_autocreate(server->backend);
+		if (renderer != NULL) {
+			return renderer;
+		}
+	}
+
+	wlr_log(WLR_INFO, "no Mesa renderer: falling back to pixman (CPU rendering)");
+	return wlr_pixman_renderer_create();
+}
+
 bool bgwl_server_start(struct bgwl_server *server) {
 	server->backend = select_backend(server, server->event_loop);
 	if (server->backend == NULL) {
@@ -327,26 +358,7 @@ bool bgwl_server_start(struct bgwl_server *server) {
 		return false;
 	}
 
-	server->renderer = wlr_renderer_autocreate(server->backend);
-	if (server->renderer == NULL) {
-		/* A KMS device with no Mesa driver of its own (VirtualBox, Hyper-V,
-		 * plain boot-time GPU-less setups) fails before wlroots even picks a
-		 * renderer: GBM cannot create a screen, EGL returns
-		 * EGL_NOT_INITIALIZED, and every backend then has nothing to draw
-		 * with. Mesa can be told to use its software KMS driver by name, and
-		 * that is the difference between "no desktop at all" and "a desktop
-		 * without acceleration" — so ask for it and try again.
-		 *
-		 * If the driver is absent, the second attempt fails the same way and
-		 * the error below is reported unchanged.
-		 */
-		if (setenv("MESA_LOADER_DRIVER_OVERRIDE", "kms_swrast", 1) == 0) {
-			wlr_log(WLR_INFO,
-				"no renderer: retrying with Mesa's software KMS driver "
-				"(kms_swrast)");
-			server->renderer = wlr_renderer_autocreate(server->backend);
-		}
-	}
+	server->renderer = create_renderer(server);
 	if (server->renderer == NULL) {
 		wlr_log(WLR_ERROR, "failed to create wlr_renderer (set WLR_RENDERER?)");
 		return false;
