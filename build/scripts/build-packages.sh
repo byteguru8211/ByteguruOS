@@ -83,7 +83,10 @@ fi
 
 for deb in "${debs[@]}"; do
 	case "${deb}" in
-		*_source.deb|*.changes|*.buildinfo) continue ;;
+		# dbgsym — не часть системы: это символы для gdb, и в live-образ им
+		# место в /usr/share/doc, а не в /usr. Отдельный debug-репозиторий —
+		# отдельная задача.
+		*_source.deb|*-dbgsym_*.deb|*.changes|*.buildinfo) continue ;;
 	esac
 	cp -f "${deb}" "${OUT_DIR}/"
 	echo "  + $(basename "${deb}")"

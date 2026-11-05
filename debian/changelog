@@ -1,4 +1,4 @@
-byteguru (1.0.0-1) unstable; urgency=medium
+byteguru (1.0.0) unstable; urgency=medium
 
   * Композитор bgwl собран, запущен и покрыт тестами: потоки, тайлинг,
     эксклюзивные зоны панели, ~25 protocol globals, session lock, idle,

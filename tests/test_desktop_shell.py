@@ -359,3 +359,26 @@ def test_missing_socket_is_an_explicit_error(tmp_path, monkeypatch):
     monkeypatch.setenv("BGWL_CONTROL_SOCKET", str(tmp_path / "nothing.sock"))
     with pytest.raises(RuntimeError):
         Compositor().state()
+
+
+# ---------------------------------------------------------------------- упаковка
+def test_every_launcher_is_installed_by_some_package():
+    """Каждый скрипт из bin/ обязан попасть в .deb.
+
+    dh_missing падает на этом сам, но только при сборке пакетов в контейнере,
+    то есть постфактум. Здесь проверка стоит в обычном прогоне тестов:
+    новый бинарник оболочки без строки в *.install — это «в образе команды
+    нет», что пользователь замечает первым.
+    """
+    root = Path(__file__).resolve().parent.parent
+    installed = set()
+    for listing in (root / "debian").glob("*.install"):
+        for line in listing.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line and not line.startswith("#"):
+                installed.add(line.split()[0])
+    missing = sorted(
+        f"usr/bin/{script.name}" for script in (root / "bin").iterdir()
+        if script.is_file() and not script.name.endswith(".pyc")
+        and f"usr/bin/{script.name}" not in installed)
+    assert not missing, f"не указаны в debian/*.install: {missing}"
