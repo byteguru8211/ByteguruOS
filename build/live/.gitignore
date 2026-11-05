@@ -20,3 +20,11 @@ archive/
 *.pack
 *.zsync
 live-image*
+
+# служебные отметки стадий live-build: создаются и удаляются самой lb,
+# в git они превращаются в шум на каждую сборку
+.build/
+chroot.files
+chroot.packages.*
+chroot.installed_tmp_pkgs
+.lock
