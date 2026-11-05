@@ -332,6 +332,11 @@ do_clean() {
 	rm -f "${LIVE_DIR}"/*.iso "${LIVE_DIR}"/*.hybrid.iso 2>/dev/null || true
 	rm -rf "${LIVE_DIR}/binary" "${LIVE_DIR}/binary_"* "${LIVE_DIR}/chroot" \
 		"${LIVE_DIR}/archive" "${LIVE_DIR}/cache" "${INCLUDES_DIR}" 2>/dev/null || true
+	# Отметки стадий — то, из-за чего «чистая» сборка не бывает чистой. lb clean
+	# снимает их сам, но при прерванной сборке (питание, Ctrl+C, упавший
+	# xorriso) они остаются, и следующий прогон пропускает стадию, чей результат
+	# уже удалён: так было получено «chroot без ядра» на cp chroot/boot/vmlinuz-*.
+	rm -rf "${LIVE_DIR}/.build" "${LIVE_DIR}/.lock" 2>/dev/null || true
 	rm -rf "${OUT_DIR}" 2>/dev/null || true
 	log "очистка завершена"
 }
