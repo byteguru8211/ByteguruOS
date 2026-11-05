@@ -1,0 +1,114 @@
+#!/bin/bash
+# Автоматическая установка из live-сессии — только по флагу ядра.
+#
+# Зачем: «установщик работает» и «образ ставится на диск и с диска
+# загружается» — разные утверждения. Проверить второе руками на каждом
+# изменении никто не будет, значит оно развалится молча. Этот скрипт — то,
+# что делает прогон в QEMU настоящим end-to-end тестом установки.
+#
+# Включается он явно, потому что иначе любой человек, загрузившийся с этого
+# ISO, получит переустановленную машину:
+#
+#   byteguru.autoinstall            — ставить на первый подходящий диск
+#   byteguru.autoinstall byteguru.target_disk=/dev/sda   — на конкретный
+#
+# Ни один из вариантов не срабатывает без флага, а live-образ флага не
+# добавляет.
+#
+# Результат — строки BYTEGURU-INSTALL-OK / BYTEGURU-INSTALL-FAIL на консоли
+# (сервис пишет StandardOutput=journal+console), их же читает тест.
+
+set -uo pipefail
+
+say() {
+	printf '%s\n' "$1"
+	printf '%s\n' "$1" > /dev/console 2>/dev/null || true
+}
+
+CMDLINE="$(cat /proc/cmdline)"
+case " ${CMDLINE} " in
+	*" byteguru.autoinstall "*) ;;
+	*) exit 0 ;;
+esac
+
+TARGET=""
+for token in ${CMDLINE}; do
+	case "${token}" in
+		byteguru.target_disk=*) TARGET="${token#*=}" ;;
+	esac
+done
+
+# Ждём диск: в госте без KVM он появляется не сразу, а «диска нет» — не
+# причина валить тест, если он просто ещё не отсканировался.
+wait_for() {
+	local node="$1" tries="${2:-120}" i=0
+	while [ "$i" -lt "$tries" ]; do
+		[ -b "$node" ] && return 0
+		sleep 1
+		i=$((i + 1))
+	done
+	return 1
+}
+
+if [ -n "$TARGET" ]; then
+	if ! wait_for "$TARGET"; then
+		say "BYTEGURU-INSTALL-FAIL: диск $TARGET не появился за 120 с"
+		exit 1
+	fi
+else
+	for candidate in /dev/sda /dev/vda /dev/nvme0n1; do
+		wait_for "$candidate" 10 && { TARGET="$candidate"; break; }
+	done
+	[ -n "$TARGET" ] || { say "BYTEGURU-INSTALL-FAIL: подходящего диска нет"; exit 1; }
+fi
+
+# Защита от самого очевидного выстрела в ногу: носитель, с которого мы
+# сейчас живые, устанавливать не может.
+if findmnt -n -o SOURCE --target /run/live/medium 2>/dev/null | grep -q "^${TARGET}"; then
+	say "BYTEGURU-INSTALL-FAIL: $TARGET — это live-носитель, а не целевой диск"
+	exit 1
+fi
+
+say "BYTEGURU-INSTALL: цель $TARGET"
+
+if ! lsblk -J -b -o NAME,TYPE,SIZE,FSTYPE,LABEL,UUID,MOUNTPOINTS,MODEL,TRAN,PARTTYPENAME \
+		> /tmp/byteguru-lsblk.json 2>/dev/null; then
+	say "BYTEGURU-INSTALL-FAIL: lsblk не отработал"
+	exit 1
+fi
+
+# План печатается до исполнения: если планировщик скажет «не могу», это
+# должно быть видно в логе, а не тонуть в коде исполнения.
+if ! bginstaller plan --disk-file /tmp/byteguru-lsblk.json --device "$TARGET" \
+		--boot uefi --profile kiosk > /tmp/byteguru-plan.txt 2>&1; then
+	say "BYTEGURU-INSTALL-FAIL: план не собрался"
+	tail -12 /tmp/byteguru-plan.txt | while read -r line; do say "  $line"; done
+	exit 1
+fi
+
+# Пароль тестовой учётной записи. Файл, а не аргумент: в argv он был бы виден
+# всему, что работает в этой сессии, включая журнал.
+PASSWORD_FILE="$(mktemp)"
+printf 'byteguru\n' > "$PASSWORD_FILE"
+chmod 600 "$PASSWORD_FILE"
+
+bginstaller apply --disk-file /tmp/byteguru-lsblk.json --device "$TARGET" \
+	--boot uefi --profile kiosk --apply --confirm-token ok \
+	--user guru --password-file "$PASSWORD_FILE" \
+	--hostname byteguru-vm --timezone Europe/Moscow --keyboard ru \
+	> /tmp/byteguru-apply.txt 2>&1
+code=$?
+rm -f "$PASSWORD_FILE"
+
+if [ $code -ne 0 ]; then
+	say "BYTEGURU-INSTALL-FAIL: apply вернул $code"
+	grep -E '^\[FAIL\]|код [0-9]+|завершилась' /tmp/byteguru-apply.txt | head -8 |
+		while read -r line; do say "  $line"; done
+	exit 1
+fi
+
+say "BYTEGURU-INSTALL-OK: система установлена на $TARGET"
+# Синхронизация обязательна: тест перезапускает QEMU по таймауту, и
+# несохранённый squashfs-кэш выглядел бы как «с диска не грузится».
+sync
+exit 0

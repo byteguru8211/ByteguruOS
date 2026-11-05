@@ -1,0 +1,21 @@
+[Unit]
+Description=Автоматическая установка ByteguruOS (только по флагу ядра)
+Documentation=file:/usr/share/doc/byteguruos/INSTALL.txt
+# Живой диск и сеть: без них apply остановится на первой же команде.
+After=multi-user.target network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/byteguru-autoinstall
+# Результат нужен там, где его читает тест, — на serial-консоли, а не только
+# в журнале, который в headless-прогоне некому смотреть.
+StandardOutput=journal+console
+StandardError=journal+console
+# Скрипт монтирует, размечает и пишет загрузчик — привилегия ему не «для
+# верности», а единственная причина, по которой он вообще работает.
+PrivateTmp=no
+
+[Install]
+WantedBy=multi-user.target
