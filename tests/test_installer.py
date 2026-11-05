@@ -884,3 +884,29 @@ def test_plan_prints_the_token_it_will_demand(tmp_path, capsys):
     token = capsys.readouterr().out.strip()
     assert code == 0
     assert token == "udalit-dannye"
+
+
+def test_api_mount_targets_are_created_before_binding(tmp_path):
+    """mount не создаёт каталог-цель — без mkdir bind /dev падает кодом 32.
+
+    Live-система переносится с исключениями (/dev, /proc, /sys, /run), поэтому
+    в установленном корне этих каталогов нет вовсе. Первый же прогон установки
+    на настоящий диск споткнулся именно здесь: разметка, форматирование и
+    перенос прошли, настройка системы оборвалась на mount --bind.
+    """
+    root = _root_with_accounts(tmp_path,
+        passwd="root:x:0:0:root:/root:/bin/bash\n",
+        group="root:x:0\nsudo:x:27:\n")
+    install_plan = planner.plan(_disk(200, ()))
+    ctx = operations.Context(target=root, username="guru", password="pw")
+    action = next(a for a in install_plan.actions if a.kind == "configure-boot")
+    jobs = operations.commands_for(action, install_plan, ctx,
+        operations.State(disk=install_plan.disk))
+    argv = [job.argv for job in jobs if job.argv]
+    made = next(i for i, a in enumerate(argv)
+        if a[:2] == ("mkdir", "-p") and f"{root}/dev" in a)
+    bound = next(i for i, a in enumerate(argv)
+        if "--bind" in a and a[-1] == f"{root}/dev")
+    assert made < bound
+    for api in ("proc", "sys", "run"):
+        assert any(a[:2] == ("mkdir", "-p") and f"{root}/{api}" in a for a in argv)

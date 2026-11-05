@@ -294,6 +294,13 @@ def _configure_boot(action, plan, ctx, state) -> list[Job]:
         # соседстве с Windows — единственная причина, по которой две ОС не
         # дерутся за одни и те же часы.
         Job(write=(f"{root}/etc/adjtime", _adjtime(policy))),
+        # Каталоги-цели bind-монтирований: live-система переносится с
+        # исключениями (/dev, /proc, /sys, /run в IMAGE_EXCLUDES), поэтому в
+        # установленном корне их нет вовсе, а mount создаёт только точки
+        # монтирования, но не каталоги. Без этого шага настройка системы
+        # падала на первом же bind — ровно так и случилось в первом прогоне
+        # установки на настоящий диск.
+        _mkdir(f"{root}/dev", f"{root}/proc", f"{root}/sys", f"{root}/run"),
         _mount_api(root, "dev"),
         _mount_api(root, "proc"),
         _mount_api(root, "sys"),
