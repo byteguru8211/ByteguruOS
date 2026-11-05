@@ -72,8 +72,35 @@ class Session:
     is_session_owner: bool = True
 
     @property
+    def wincompat_enabled(self) -> bool:
+        return bool(self.settings.get("wincompat.enabled"))
+
+    @property
     def apps(self) -> list[Application]:
-        return self.service.apps()
+        """Видимые программы.
+
+        Демон знает все источники — это его работа. Показывать же всё подряд
+        решение продукта: пока Windows-подсистема выключена, её программы,
+        обходные уровни через ВМ и перезагрузку в соседний раздел в списке
+        быть не должно. Иначе «свой дистрибутив» выглядит как витрина Wine.
+        """
+        apps = self.service.apps()
+        if self.wincompat_enabled:
+            return apps
+        return [app for app in apps if not app.needs_windows]
+
+    def find(self, query: str) -> list[Application]:
+        """Поиск по тем же видимым программам, что и список.
+
+        Отдельный метод нужен ровно потому, что лаунчер ищет через
+        `service.find`, а показывает — через `apps`: два разных источника
+        дают список, где выключенная подсистема то появляется, то исчезает.
+        """
+        if self.wincompat_enabled:
+            return self.service.find(query)
+        from bgd.model import search  # noqa: PLC0415 — только при выключенной подсистеме
+
+        return search(self.apps, query)
 
 
 def load_theme(manager: object, theme_name: str) -> None:

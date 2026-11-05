@@ -72,7 +72,9 @@ SETTINGS: dict[str, Setting] = {
         "panel.autohide", "bool", False, "Скрывать панель при развороте окна на весь экран", Scope.SESSION
     ),
     "wincompat.enabled": Setting(
-        "wincompat.enabled", "bool", True, "Подсистема запуска Windows-приложений",
+        # По умолчанию выключено: ByteguruOS — своя система, а не обёртка над
+        # Wine. Подсистема включается человеком, когда она ему реально нужна.
+        "wincompat.enabled", "bool", False, "Подсистема запуска Windows-приложений",
         Scope.WINCOMPAT, requires_root=True,
     ),
     "wincompat.network-proxy": Setting(

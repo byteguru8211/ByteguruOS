@@ -55,7 +55,7 @@ def build_window(application) -> object:
     def refill(query: str = "") -> None:
         while grid.get_first_child() is not None:
             grid.remove(grid.get_first_child())
-        apps = session.service.find(query) if query else session.apps
+        apps = session.find(query) if query else session.apps
         for index, app in enumerate(apps):
             button = _make_cell(session, app)
             grid.attach(button, index % MAX_COLUMNS, index // MAX_COLUMNS, 1, 1)
@@ -122,7 +122,7 @@ def _launch(session, app) -> int:
 
 
 def _launch_selected(session, query: str) -> int:
-    found = session.service.find(query)
+    found = session.find(query)
     if not found:
         return 1
     return _launch(session, found[0])

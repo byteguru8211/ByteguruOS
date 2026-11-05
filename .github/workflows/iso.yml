@@ -202,11 +202,11 @@ jobs:
               echo "2. Проверить: \`sha256sum -c ${name}.sha256\`"
               echo "3. Новая ВМ: Linux 2.x 64-bit, UEFI включён, Secure Boot ВЫКЛЮЧЕН."
               echo "4. Подключить \`${name}\` как оптический диск, загрузиться."
-              echo "5. Ручной путь установки — \`cat /usr/share/doc/byteguruos/INSTALL.txt\`"
-              echo "   в live-сессии; calamares в первом образе намеренно отсутствует."
+              echo "5. Установку ведёт \`Установить ByteguruOS\` (или \`bginstaller-gui\`);"
+              echo "   ручной путь — \`cat /usr/share/doc/byteguruos/INSTALL.txt\`."
               echo
-              echo "> Реальная загрузоспособность в этом workflow НЕ проверяется:"
-              echo "> boot-тест в qemu здесь не запускается (см. TODO ниже)."
+              echo "> Загрузоспособность проверяет job \`boot-smoke-test\`: он монтирует"
+              echo "> образ в QEMU и ждёт строки BYTEGURU-SESSION-OK на консоли."
             done
           } >>"${GITHUB_STEP_SUMMARY}"
 
@@ -223,24 +223,61 @@ jobs:
           retention-days: 30
           if-no-files-found: error
 
-      - name: Что проверить руками после первого успешного прогона
+      - name: Что проверить руками после прогона
         if: success()
-        # Только памятка в лог: реальный boot-тест здесь не выполняется.
-        # TODO (следующий этап): qemu boot-smoke-test (qemu-system-x86_64
-        #   -cdrom образ.iso -boot d -no-reboot) с проверкой появления
-        #   приглашения live-сессии — ловит ~90% регрессий загрузчика. Пока не
-        #   делаем: не смешиваем сборку и тестирование в одном job и не
-        #   раздуваем время прогона.
+        # Автопрогон покрывает загрузку и наличие сеанса; железо, которое у
+        # runner нет (UEFI-прошивка, диск с Windows, Bluetooth), остаётся
+        # руками.
         run: |
           set -euo pipefail
-          echo "Чек-лист ручной проверки первого собранного образа:"
+          echo "Чек-лист ручной проверки собранного образа:"
           echo "  [ ] ISO грузится в VirtualBox по UEFI (не только по BIOS)"
-          echo "  [ ] В live-сессии есть Xfce и раскладка us,ru (Alt+Shift)"
+          echo "  [ ] В live-сессии свой стол: панель bgpanel, Guru Line (Super+Esc),"
+          echo "      раскладка us,ru переключается по Alt+Shift"
           echo "  [ ] Часовой пояс Europe/Moscow, LANG=ru_RU.UTF-8"
           echo "  [ ] byteguru-boot-status и byteguru-boot-repair --dry-run не падают"
           echo "  [ ] NTFS-том Windows монтируется только для чтения (udisksctl mount)"
           echo "  [ ] Общая папка VirtualBox монтируется byteguru-vboxsf-mount"
-          echo "  [ ] Ручной путь установки из INSTALL.txt проходит на пустом диске"
+          echo "  [ ] Окно установки проходит на пустом виртуальном диске"
+
+  boot-smoke-test:
+    name: Прогон образа в QEMU (загрузоспособность)
+    needs: iso-amd64
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Скачивание собранного образа
+        uses: actions/download-artifact@v4
+        with:
+          name: byteguruos-amd64-iso-run${{ github.run_number }}
+          path: build/out
+
+      - name: Установка QEMU (только системный модуль, без GUI)
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends qemu-system-x86
+
+      - name: Прогон
+        # KVM на runner есть не всегда, поэтому акселератор выбирает qemu сам
+        # (kvm → tcg). Под TCG загрузка занимает минуты, отсюда большой
+        # BOOT_TIMEOUT.
+        run: |
+          set -euo pipefail
+          iso="$(ls -1 build/out/*.iso | head -1)"
+          sudo BOOT_TIMEOUT=900 bash build/scripts/boot-smoke-test.sh "${iso}"
+
+      - name: Лог консоли при падении
+        if: failure()
+        run: |
+          set -euo pipefail
+          for f in /tmp/byteguru-boot-test.*/console.log; do
+            [ -f "${f}" ] || continue
+            echo "===== ${f} ====="
+            tail -200 "${f}"
+          done
 
   lint-shell:
     name: shellcheck (не блокирующий)

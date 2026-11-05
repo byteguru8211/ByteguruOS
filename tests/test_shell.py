@@ -29,7 +29,9 @@ def test_settings_have_defaults_for_every_key():
     # тесте: тест проверяет, что значение есть и совпадает со схемой.
     assert values["theme.name"] == settings.SETTINGS["theme.name"].default
     assert values["theme.mode"] == "dark"
-    assert values["wincompat.enabled"] is True
+    # Windows-подсистема выключена по умолчанию: ByteguruOS — своя система,
+    # а не обёртка над Wine, и список программ не должен начинаться с чужих.
+    assert values["wincompat.enabled"] is False
     assert values["storage.ntfs-write"] is False
     # Ни одна настройка не должна оставаться без значения по умолчанию.
     assert set(values) == set(settings.SETTINGS)

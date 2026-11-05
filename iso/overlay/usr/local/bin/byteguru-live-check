@@ -1,0 +1,59 @@
+#!/bin/sh
+# Само-проверка live-сеанса: композитор поднялся, оболочка его видит.
+#
+# Зачем отдельный скрипт: «образ загрузился» и «образ дал рабочий сеанс» —
+# разные вещи. Без этой проверки CI видит только чёрный экран, а причина
+# (нет сокета, нет Wayland-дисплея, сессия упала на старте) разбирается
+# гаданием по скриншотам.
+#
+# Вывод идёт в /dev/console (см. StandardOutput=journal+console у сервиса),
+# поэтому строки BYTEGURU-SESSION-OK / -FAIL попадают и в serial-лог QEMU,
+# и в журнал, и в консоль live-сессии.
+
+set -u
+
+# Проверка имеет смысл только в live-сессии: на установленной системе такого
+# монтирования нет, и сервис должен молча пройти мимо, а не ругаться при
+# каждой загрузке.
+if [ ! -d /run/live/medium ]; then
+	exit 0
+fi
+
+USER_NAME="${BG_LIVE_USER:-user}"
+RUNTIME="${BG_LIVE_RUNTIME:-/run/user/1000}"
+SOCKET="$RUNTIME/byteguru/compositor.sock"
+TRIES="${BG_LIVE_CHECK_TRIES:-90}"
+
+say() {
+	printf '%s\n' "$1"
+	printf '%s\n' "$1" > /dev/console 2>/dev/null || true
+}
+
+i=0
+while [ "$i" -lt "$TRIES" ]; do
+	[ -S "$SOCKET" ] && break
+	sleep 1
+	i=$((i + 1))
+done
+
+if [ ! -S "$SOCKET" ]; then
+	say "BYTEGURU-SESSION-FAIL: сокета композитора нет через ${TRIES} с: $SOCKET"
+	say "BYTEGURU-SESSION-FAIL: сеанс не поднялся — смотреть journalctl -u bgwl-session"
+	exit 1
+fi
+
+# Проверку делает live-пользователь: сокет принадлежит ему, и «root видит
+# сокет» не означает, что оболочка может к нему подключиться.
+status=$(su - "$USER_NAME" -c "XDG_RUNTIME_DIR=$RUNTIME bgctl --json status" 2>&1)
+code=$?
+
+if [ $code -ne 0 ] || ! printf '%s' "$status" | grep -q '"compositor": *"bgwl"'; then
+	say "BYTEGURU-SESSION-FAIL: bgctl status вернул $code"
+	printf '%s\n' "$status" | head -6 | while read -r line; do say "  $line"; done
+	exit 1
+fi
+
+streams=$(printf '%s' "$status" | grep -c '"name"')
+windows=$(printf '%s' "$status" | grep -c '"app_id"')
+say "BYTEGURU-SESSION-OK: композитор отвечает, потоков: $streams, окон: $windows"
+exit 0

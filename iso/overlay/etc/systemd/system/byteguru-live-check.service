@@ -1,0 +1,16 @@
+[Unit]
+Description=Само-проверка live-сеанса ByteguruOS
+After=multi-user.target getty@tty1.service
+Wants=getty@tty1.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/byteguru-live-check
+# journal+console, а не только журнал: при headless-прогоне QEMU журнала не
+#кому читать, а /dev/console попадает в serial-лог, который и проверяет CI.
+StandardOutput=journal+console
+StandardError=journal+console
+
+[Install]
+WantedBy=multi-user.target

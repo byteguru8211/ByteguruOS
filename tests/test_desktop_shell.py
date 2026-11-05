@@ -22,6 +22,73 @@ from bgshell import systeminfo, themes  # noqa: E402
 from bgshell.ctl import Compositor, Snapshot, socket_path  # noqa: E402
 
 
+# ------------------------------------------------------------------- список программ
+class _FakeService:
+    """Минимум от bgd.Service: два метода, которыми пользуется оболочка."""
+
+    def __init__(self, apps):
+        self._apps = apps
+
+    def apps(self):
+        return list(self._apps)
+
+    def find(self, query):
+        return [app for app in self._apps if query.lower() in app.name.lower()]
+
+
+def _app(name, kind_name, supported_coverage=""):
+    from bgd.model import AppKind, Application
+
+    return Application(id=name.lower(), name=name, kind=AppKind[kind_name],
+        coverage=supported_coverage)
+
+
+def test_windows_apps_hidden_until_subsystem_enabled(tmp_path):
+    """Выключенная подсистема не показывается нигде — ни списком, ни поиском.
+
+    Проверка нужна именно здесь, а не в bgd: демон обязан знать все источники,
+    а решение «показывать или нет» принимает оболочка. Если фильтр оставить
+    только в списке, поиск в лаунчере всё равно выдаст чужие программы, и
+    «выключено» окажется словами.
+    """
+    from bgshell.settings import SettingsStore
+    from bgshell.ui import bggui
+
+    apps = [_app("Терминал", "LINUX"), _app("1С:Клиент", "WINCOMPAT", "l1"),
+        _app("Режим ВМ", "VM", "l3"), _app("Перезагрузка в Windows", "REBOOT", "l4")]
+    store = SettingsStore(path=tmp_path / "shell.ini")
+    session = bggui.Session(settings=store, service=_FakeService(apps),
+        theme_name="byteguru-dark")
+
+    store.set("wincompat.enabled", False)
+    assert [app.name for app in session.apps] == ["Терминал"]
+    assert [app.name for app in session.find("1с")] == []
+
+    store.set("wincompat.enabled", True)
+    assert len(session.apps) == 4
+    assert [app.name for app in session.find("1с")] == ["1С:Клиент"]
+
+
+def test_coverage_badge_only_for_windows_apps():
+    """Значок покрытия — про перенос чужих программ, а не про каждую иконку.
+
+    Раньше «не поддерживается» висело на Firefox и LibreOffice: нативному
+    приложению нечего переносить, и уровень покрытия у него отсутствует по
+    определению.
+    """
+    from bgd.model import AppKind, Application
+    from bgshell.ui import bggui
+
+    native = Application(id="firefox", name="Firefox", kind=AppKind.LINUX)
+    unproven = Application(id="1c", name="1С:Клиент", kind=AppKind.WINCOMPAT)
+    proven = Application(id="nvim", name="Neovim", kind=AppKind.WINCOMPAT,
+        coverage="l1", evidence="подтверждено прогонами")
+
+    assert bggui.coverage_badge(native) == ("", "")
+    assert bggui.coverage_badge(unproven)[0] == "не поддерживается"
+    assert bggui.coverage_badge(proven)[0] == "L1"
+
+
 # ------------------------------------------------------------------- палитра
 def test_palette_derives_contrast_text():
     dark_accent = themes.Palette(accent="#1b3f8f", dark=True)   # тёмный синий
