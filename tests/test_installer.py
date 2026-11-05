@@ -9,7 +9,8 @@ import pytest
 
 from bginstaller import bootrepair, cli, clock, models, operations, planner, probe, safety
 from bginstaller.apply import apply_plan, confirm_token
-from bginstaller.errors import ApplyError, BootRepairError, PlanError, ProbeError
+from bginstaller.errors import (ApplyError, BootRepairError, InstallerError, PlanError,
+    ProbeError)
 from bginstaller.models import BootMode, FSType, OsKind, Partition, PartitionTable, Profile, WindowsState, GiB, MiB
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -583,3 +584,43 @@ def test_gui_detect_disks_survives_missing_lsblk(monkeypatch):
 
     monkeypatch.setattr(gui.subprocess, "run", boom)
     assert gui.detect_disks() == []
+
+
+# ------------------------------------------------------------------ выбор диска
+def _two_disk_lsblk(tmp_path: Path) -> Path:
+    """lsblk-дамп с двумя носителями: флешка live-системы и внутренний диск."""
+    payload = {
+        "blockdevices": [
+            {"name": "sda", "type": "disk", "size": 24 * GiB, "fstype": None,
+             "label": None, "uuid": None, "mountpoints": [None], "model": "VirtIO",
+             "children": []},
+            {"name": "sdb", "type": "disk", "size": 2 * GiB, "fstype": None,
+             "label": "DEBIAN LIVE", "uuid": None, "mountpoints": ["/run/live/medium"],
+             "model": "USB", "children": []},
+        ]
+    }
+    path = tmp_path / "lsblk.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return path
+
+
+def test_device_option_picks_the_named_disk(tmp_path):
+    """Без --device автоматика устанавливается наугад.
+
+    В live-сессии первым в lsblk может оказаться сама флешка: «взяли первый
+    диск» тогда означает «затёрли носитель, с которого загрузились».
+    """
+    description = _two_disk_lsblk(tmp_path)
+    for device, expected in (("sda", "/dev/sda"), ("/dev/sdb", "/dev/sdb"),
+            ("sdb", "/dev/sdb")):
+        disk, _windows = cli._load_description(description, device)
+        assert disk.device == expected
+    # Без выбора — как раньше, первый, чтобы не сломать существующие вызовы.
+    assert cli._load_description(description, None)[0].device == "/dev/sda"
+
+
+def test_unknown_device_is_listed_not_guessed(tmp_path):
+    description = _two_disk_lsblk(tmp_path)
+    with pytest.raises(InstallerError, match="нет в описании") as caught:
+        cli._load_description(description, "/dev/nvme0n1")
+    assert "/dev/sda" in str(caught.value) and "/dev/sdb" in str(caught.value)

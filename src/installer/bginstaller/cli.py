@@ -22,8 +22,14 @@ from bginstaller.probe import boot_mode_from_efivar, detect_windows, enrich_with
 from bginstaller.safety import evaluate, format_report
 
 
-def _load_description(path: Path) -> tuple[Disk, WindowsState | None]:
-    """Описание диска вместе с известным состоянием Windows (для прогонов на файлах)."""
+def _load_description(path: Path, device: str | None = None) -> tuple[Disk, WindowsState | None]:
+    """Описание диска вместе с известным состоянием Windows (для прогонов на файлах).
+
+    `device` нужен автоматике: lsblk отдаёт все носители разом, а «первый в
+    списке» в live-сессии — это рулетка, в которой установщик может выбрать
+    саму флешку. Не найденный диск — ошибка с перечислением доступных, а не
+    молчаливый выбор соседа.
+    """
     raw = path.read_text(encoding="utf-8")
     try:
         payload = json.loads(raw)
@@ -35,11 +41,22 @@ def _load_description(path: Path) -> tuple[Disk, WindowsState | None]:
         disks = parse_lsblk(raw)
         if not disks:
             raise InstallerError("в списке блочных устройств нет дисков")
-        return disks[0], None
+        return _choose(disks, device), None
     disks = parse_lsblk(raw)
     if not disks:
         raise InstallerError("в файле нет ни одного диска")
-    return disks[0], None
+    return _choose(disks, device), None
+
+
+def _choose(disks: tuple[Disk, ...], device: str | None) -> Disk:
+    if device is None:
+        return disks[0]
+    wanted = device if device.startswith("/dev/") else f"/dev/{device}"
+    for disk in disks:
+        if disk.device == wanted:
+            return disk
+    names = ", ".join(sorted(disk.device for disk in disks))
+    raise InstallerError(f"диска {wanted} нет в описании; доступны: {names}")
 
 
 def _disk_from_dict(data: dict) -> Disk:
@@ -125,7 +142,7 @@ def cmd_probe(args: argparse.Namespace) -> int:
 
 
 def cmd_plan(args: argparse.Namespace) -> int:
-    disk, hinted = _load_description(Path(args.disk_file))
+    disk, hinted = _load_description(Path(args.disk_file), args.device)
     windows = hinted or detect_windows(disk)
     boot_mode = BootMode(args.boot)
     install_plan = (
@@ -153,7 +170,7 @@ def cmd_plan(args: argparse.Namespace) -> int:
 
 
 def cmd_check(args: argparse.Namespace) -> int:
-    disk, hinted = _load_description(Path(args.disk_file))
+    disk, hinted = _load_description(Path(args.disk_file), args.device)
     windows = hinted or detect_windows(disk)
     gates = evaluate(
         disk,
@@ -170,7 +187,7 @@ def cmd_check(args: argparse.Namespace) -> int:
 
 
 def cmd_apply(args: argparse.Namespace) -> int:
-    disk, hinted = _load_description(Path(args.disk_file))
+    disk, hinted = _load_description(Path(args.disk_file), args.device)
     windows = hinted or detect_windows(disk)
     if args.erase:
         install_plan = plan_erase_and_install(disk,
@@ -257,6 +274,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     def common(target: argparse.ArgumentParser) -> None:
         target.add_argument("--disk-file", required=True, help="JSON/lsblk-описание диска (см. tests/fixtures)")
+        target.add_argument("--device", default=None,
+            help="какой диск взять из описания (по умолчанию — первый)")
         target.add_argument("--boot", choices=[item.value for item in BootMode], default="uefi")
         target.add_argument("--profile", choices=[item.value for item in Profile], default="workstation")
         target.add_argument("--memory-gib", type=int, default=8)
