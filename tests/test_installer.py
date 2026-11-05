@@ -664,3 +664,42 @@ def test_console_absent_on_normal_desktop(tmp_path, monkeypatch):
         writer=lambda path, content: written.__setitem__(path, content),
         runner=lambda argv, stdin=None: 0)
     assert not any(path.endswith("50-byteguru-console.cfg") for path in written)
+
+
+def test_bios_boot_partition_appears_only_for_legacy_gpt():
+    """GRUB для BIOS на GPT не влезает в MBR — ему нужен отдельный раздел.
+
+    Без него `grub-install --target=i386-pc` падает уже ПОСЛЕ разметки и
+    переноса системы: пользователь получает диск с данными и без
+    загрузчика. На msdos-таблице раздел не нужен, и создавать его — значит
+    съесть место без причины.
+    """
+    legacy = planner.plan(_disk(60, ()), profile=Profile.KIOSK,
+        boot_mode=BootMode.LEGACY)
+    bios = [a for a in legacy.actions if a.kind == "create-partition"
+        and "--type" in a.arguments and "bios" in a.arguments]
+    assert len(bios) == 1
+    assert "--fs" in bios[0].arguments and "none" in bios[0].arguments
+
+    uefi = planner.plan(_disk(60, ()), profile=Profile.KIOSK,
+        boot_mode=BootMode.UEFI)
+    assert not [a for a in uefi.actions if "--type" in a.arguments
+        and "bios" in a.arguments]
+
+    mbr = planner.plan(_disk(60, (), table=PartitionTable.MBR),
+        profile=Profile.KIOSK, boot_mode=BootMode.LEGACY)
+    assert not [a for a in mbr.actions if "--type" in a.arguments
+        and "bios" in a.arguments]
+
+
+def test_bios_partition_is_flagged_not_formatted():
+    disk = _disk(60, ())
+    install_plan = planner.plan(disk, profile=Profile.KIOSK,
+        boot_mode=BootMode.LEGACY)
+    action = next(a for a in install_plan.actions if a.kind == "create-partition"
+        and "bios" in a.arguments)
+    jobs = operations.commands_for(action, install_plan, operations.Context(),
+        operations.State(disk=install_plan.disk))
+    flat = [" ".join(job.argv) for job in jobs if job.argv]
+    assert any("set 1 bios_grub on" in line or "bios_grub on" in line for line in flat)
+    assert not any("mkfs" in line for line in flat)

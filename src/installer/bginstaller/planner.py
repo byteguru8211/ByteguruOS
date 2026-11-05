@@ -22,6 +22,7 @@ from bginstaller.models import (
     InstallPlan,
     Layout,
     Partition,
+    PartitionTable,
     Profile,
     WindowsState,
     GiB,
@@ -42,6 +43,11 @@ SHRINK_STEP = 4 * GiB           # шаг подбора величины сжа�
 ROOT_FLOOR = 10 * GiB
 VAR_FLOOR = 6 * GiB
 SWAP_FLOOR = 1 * GiB
+
+# 1 МиБ — минимум для core.img, 2 МиБ — сколько даёт parted по умолчанию;
+# берём с запасом, потому что «не хватило 512 КИБ» в загрузчике — это
+# незагружающаяся машина, а не предупреждение.
+BIOS_GRUB_BYTES = 2 * MiB
 
 
 @dataclass(frozen=True)
@@ -217,11 +223,26 @@ def _segments_after_shrink(disk: Disk, windows: WindowsState, shrink: int) -> li
     return segments
 
 
-def _items(layout_items: list[tuple[str, int]], esp_cost: int) -> list[tuple[str, int]]:
+def _items(layout_items: list[tuple[str, int]], esp_cost: int,
+        bios_cost: int = 0) -> list[tuple[str, int]]:
     items = list(layout_items)
     if esp_cost:
         items.append(("esp", esp_cost))
+    if bios_cost:
+        items.append(("bios", bios_cost))
     return [item for item in items if item[1] > 0]
+
+
+def _bios_cost(disk: Disk, boot_mode: BootMode) -> int:
+    """Раздел BIOS boot: без него grub-install --target=i386-pc на GPT отказывается работать.
+
+    GRUB второго поколения для BIOS-загрузки встраивает вторую стадию не в MBR
+    (там 446 байт, и они заняты), а в отдельный раздел сразу после таблицы. На
+    msdos-таблице он не нужен вовсе — поэтому условие именно «legacy + GPT».
+    """
+    if boot_mode is BootMode.LEGACY and disk.table is PartitionTable.GPT:
+        return BIOS_GRUB_BYTES
+    return 0
 
 
 def _esp_bytes(disk: Disk) -> int:
@@ -236,6 +257,10 @@ def _allocate(disk: Disk, windows: WindowsState, sizing: Sizing, boot_mode: Boot
     esp = disk.esp
     reuse_esp = esp is not None and esp.size_bytes >= MIN_ESP_BYTES and boot_mode is BootMode.UEFI
     esp_cost = 0 if reuse_esp else (_esp_bytes(disk) if boot_mode is BootMode.UEFI else 0)
+    # Всё, что занимает место, но не является данными: ESP и (для BIOS+GPT)
+    # раздел под core.img. Раздельно они попадают только в _items, поэтому
+    # «сколько осталось на root» считается по сумме.
+    bios_cost = _bios_cost(disk, boot_mode)
 
     room = 0
     if windows.present:
@@ -259,14 +284,14 @@ def _allocate(disk: Disk, windows: WindowsState, sizing: Sizing, boot_mode: Boot
     while True:
         segments = _segments_after_shrink(disk, windows, shrink)
         free = sum(length for _start, length in segments)
-        result = _place(segments, _items(items_for(sizing), esp_cost))
+        result = _place(segments, _items(items_for(sizing), esp_cost, bios_cost))
         if result is not None:
             break
         if not windows.present:
             # Места не хватает — уменьшаем сами разделы, а не отказываем:
             # «недостаточно места» на машине, где система помещается, это баг
             # планировщика, а не диска.
-            fitted = _fit_sizing(sizing, free, esp_cost)
+            fitted = _fit_sizing(sizing, free, esp_cost + bios_cost)
             if fitted is None:
                 raise PlanError(
                     f"не хватает места: свободно {gib(free)} ГиБ, нужно не"
@@ -311,7 +336,7 @@ def _placements(disk: Disk, windows: WindowsState, layout: Layout, boot_mode: Bo
         ("swap", layout.swap_bytes),
         ("shared", layout.shared_bytes if layout.create_shared else 0),
     ]
-    result = _place(segments, _items(items, esp_cost))
+    result = _place(segments, _items(items, esp_cost, _bios_cost(disk, boot_mode)))
     if result is None:
         raise PlanError("готовая раскладка не размещается в непрерывных областях")
     return result[0]
@@ -385,10 +410,26 @@ def _ordered_actions(
             ("swap", layout.swap_bytes),
             ("shared", layout.shared_bytes if layout.create_shared else 0),
         ]
-        result = _place(single, _items(items, esp_cost))
+        result = _place(single, _items(items, esp_cost, _bios_cost(disk, boot_mode)))
         if result is None:
             raise PlanError("раскладка не помещается на чистый диск")
         placed = result[0]
+
+    if _bios_cost(disk, boot_mode):
+        add(
+            "create-partition",
+            disk.device,
+            "--start",
+            str(placed["bios"]),
+            "--size",
+            str(BIOS_GRUB_BYTES),
+            "--type",
+            "bios",
+            "--fs",
+            "none",
+            "--label",
+            "",
+        )
 
     if boot_mode is BootMode.UEFI and not layout.reuse_esp:
         add(
@@ -496,12 +537,13 @@ def plan_erase_and_install(disk: Disk, *, profile: Profile, boot_mode: BootMode 
     clean = replace(disk, partitions=())
     sizing = SIZINGS[profile]
     esp_cost = _esp_bytes(clean) if boot_mode is BootMode.UEFI else 0
-    usable = clean.size_bytes - esp_cost - TAIL_RESERVE - clean.first_usable(TAIL_RESERVE)
-    fitted = _fit_sizing(sizing, usable + esp_cost, esp_cost)
+    overhead = esp_cost + _bios_cost(clean, boot_mode)
+    usable = clean.size_bytes - overhead - TAIL_RESERVE - clean.first_usable(TAIL_RESERVE)
+    fitted = _fit_sizing(sizing, usable + overhead, overhead)
     if fitted is None:
         raise PlanError(
             f"диска {gib(disk.size_bytes)} ГиБ мало: нужно не меньше"
-            f" {gib(minimum_room() + esp_cost)} ГиБ")
+            f" {gib(minimum_room() + overhead)} ГиБ")
     sizing = fitted
     fixed = sizing.root + sizing.var + sizing.swap + (sizing.shared if sizing.create_shared else 0)
     home_bytes = usable - fixed if sizing.home_min else 0

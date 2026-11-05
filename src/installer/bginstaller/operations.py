@@ -201,6 +201,13 @@ def _create_partition(action, plan, ctx, state) -> list[Job]:
     if kind == "esp":
         jobs.append(Job(argv=("parted", "--script", action.target, "set",
             str(number), "esp", "on")))
+    elif kind == "bios":
+        # Флаг bios_grub говорит parted не создавать файловую систему внутри и
+        # даёт grub-install место для core.img. Без него grub-install
+        # --target=i386-pc отвечает «cannot find a BIOS boot partition» —
+        # то есть BIOS-машина остаётся без загрузчика на уже размеченном диске.
+        jobs.append(Job(argv=("parted", "--script", action.target, "set",
+            str(number), "bios_grub", "on")))
     jobs.append(Job(argv=("partprobe", action.target)))
     jobs.append(Job(argv=("udevadm", "settle", "--timeout=60")))
 
