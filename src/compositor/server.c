@@ -11,6 +11,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
+
+#include <stdint.h>
+
+#include <execinfo.h>
 
 #include <wayland-server-core.h>
 #include <wlr/backend.h>
@@ -231,6 +236,82 @@ static struct wlr_backend *select_backend(struct bgwl_server *server,
 	}
 
 	return backend;
+}
+
+/* --- crash logging ------------------------------------------------------ */
+
+/* Падение на первом кадре в чужой виртуальной машине — это то, чего мы не
+ * увидим иначе: ядро пишет в dmesg только адрес, а по одному адресу виновника
+ * не найти. Стек в журнале сеанса (stderr композитора уже направлен туда)
+ * превращает безликое «код 139» в конкретное место.
+ *
+ * Из обработчика сигнала безопасно делать немногое, поэтому здесь ровно то,
+ * что не требует памяти: write() заголовка и backtrace_symbols_fd(), который
+ * не выделяет её и не форматирует. Дальше обработчик возвращает сигналу
+ * заводское поведение — код выхода остаётся 128+сигнал, и ни bgwl-session,
+ * ни проверки образа ничего нового не замечают.
+ */
+static void write_hex(int fd, unsigned long value) {
+	static const char digits[] = "0123456789abcdef";
+	char buffer[16];
+	int filled = 0;
+	for (int shift = 60; shift >= 0; shift -= 4) {
+		buffer[filled++] = digits[(value >> shift) & 0xf];
+	}
+	if (write(fd, buffer, filled) < 0) {
+		return;
+	}
+}
+
+static void handle_crash(int signal_number, siginfo_t *info, void *ucontext) {
+	(void)ucontext;
+	static const char header[] = "bgwl: падение, стек вызовов:\n";
+	static const char at[] = "  адрес обращения: 0x";
+	static const char newline[] = "\n";
+	if (write(STDERR_FILENO, header, sizeof(header) - 1) < 0) {
+		/* Консоль может быть закрыта — стек важнее сообщения о неудаче. */
+	}
+	/* si_addr отвечает на единственный вопрос, который нельзя вывести из
+	 * адреса возврата: ноль со смещением — это разыменованная структура
+	 * (и по смещению видно, какое поле), а заведомо чужое значение — испорченный
+	 * указатель. Разбор этих двух случаев идёт совершенно разными дорогами. */
+	if (info != NULL) {
+		if (write(STDERR_FILENO, at, sizeof(at) - 1) < 0) {
+			/* Тот же случай: без адреса разберём по стеку. */
+		}
+		write_hex(STDERR_FILENO, (unsigned long)(uintptr_t)info->si_addr);
+		if (write(STDERR_FILENO, newline, 1) < 0) {
+			/* Пусто. */
+		}
+	}
+	void *frames[64];
+	int depth = backtrace(frames, 64);
+	backtrace_symbols_fd(frames, depth, STDERR_FILENO);
+	signal(signal_number, SIG_DFL);
+}
+
+static void install_crash_logging(void) {
+	/* Стек для обработчика обязателен: если падение — уход стека, обработчик
+	 * на том же стеке не выполнится никогда, и мы потеряем ровно тот случай,
+	 * ради которого всё это написано. Память берётся статическая: alloca()
+	 * освободилась бы вместе с этой функцией, а sigaltstack() живёт весь
+	 * процесс. */
+	static char stack_memory[256 * 1024];
+	stack_t alt_stack = {
+		.ss_sp = stack_memory,
+		.ss_size = sizeof(stack_memory),
+		.ss_flags = 0,
+	};
+	if (sigaltstack(&alt_stack, NULL) != 0) {
+		return;
+	}
+
+	struct sigaction action = {0};
+	action.sa_sigaction = handle_crash;
+	action.sa_flags = SA_SIGINFO | SA_ONSTACK;
+	sigemptyset(&action.sa_mask);
+	sigaction(SIGSEGV, &action, NULL);
+	sigaction(SIGBUS, &action, NULL);
 }
 
 /* --- signals ------------------------------------------------------------ */
@@ -695,6 +776,7 @@ void bgwl_server_finish(struct bgwl_server *server) {
 
 int main(int argc, char **argv) {
 	wlr_log_init(WLR_DEBUG, NULL);
+	install_crash_logging();
 
 	handle_info_args(argc, argv, argv[0]);
 
