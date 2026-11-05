@@ -103,19 +103,13 @@ disk_opts=(-drive "file=$DISK,if=none,id=disk0,format=qcow2" -device virtio-blk-
 # shellcheck disable=SC2054
 answer_opts=(-drive "file=$ANSWER_IMG,if=none,id=ans0,format=raw" -device virtio-blk-pci,drive=ans0)
 
-# Носители с явным порядком загрузки: OVMF берёт его из fw_cfg (bootindex), а
-# «-boot order=d» — соглашение BIOS, которое UEFI-прошивка учитывает настолько,
-# насколько сама сочтёт нужным. Без bootindex пустой целевой диск вполне мог
-# пробоваться раньше ISO, и прогон кончался бы таймаутом без всякой связи с
-# установщиком.
+# ISO подключается через -cdrom, а порядок — через -boot order: у CD-привода
+# без явного IDE-моста нет короткого способа задать bootindex («ide-cd-pci» —
+# несуществующая модель устройства), а OVMF читает fw_cfg и так. Проверено на
+# QEMU 10.0: с именованной шиной фаза 1 не стартует вообще.
 # shellcheck disable=SC2054
-cd_opts=(-drive "file=$ISO,if=none,id=cd0,media=cdrom,readonly=on"
-	-device "ide-cd-pci,drive=cd0,bootindex=1")
-set_disk_opts() { # set_disk_opts <bootindex>
-	# shellcheck disable=SC2054
-	disk_opts=(-drive "file=$DISK,if=none,id=disk0,format=qcow2"
-		-device "virtio-blk-pci,drive=disk0,bootindex=$1")
-}
+disk_opts=(-drive "file=$DISK,if=none,id=disk0,format=qcow2"
+	-device virtio-blk-pci,drive=disk0)
 # shellcheck disable=SC2054
 answer_opts=(-drive "file=$ANSWER_IMG,if=none,id=ans0,format=raw"
 	-device virtio-blk-pci,drive=ans0)
@@ -176,9 +170,8 @@ report() { # report <заголовок> <лог>
 }
 
 log "фаза 1: установка на виртуальный диск (до ${INSTALL_TIMEOUT} с)"
-set_disk_opts 2
 run_phase "$WORK/install.log" "$INSTALL_TIMEOUT" "BYTEGURU-INSTALL-OK" \
-	"${disk_opts[@]}" "${answer_opts[@]}" "${cd_opts[@]}"
+	"${disk_opts[@]}" "${answer_opts[@]}" -cdrom "$ISO" -boot order=d
 install_rc=$?
 case $install_rc in
 	0) log "ok: система установлена на виртуальный диск" ;;
@@ -192,9 +185,8 @@ case $install_rc in
 esac
 
 log "фаза 2: загрузка с установленного диска (до ${SESSION_TIMEOUT} с)"
-set_disk_opts 1
 run_phase "$WORK/boot.log" "$SESSION_TIMEOUT" "BYTEGURU-SESSION-OK" \
-	"${disk_opts[@]}"
+	"${disk_opts[@]}" -boot order=c
 boot_rc=$?
 case $boot_rc in
 	0) log "ok: установленная система загрузилась и подняла сеанс" ;;
