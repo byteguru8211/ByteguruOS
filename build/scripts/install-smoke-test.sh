@@ -73,10 +73,12 @@ log "образ: $ISO"
 qemu-img create -f qcow2 "$DISK" "${DISK_GIB}G" >/dev/null || die "qemu-img не создал диск"
 cp "$OVMF_VARS_TEMPLATE" "$VARS" || die "не удалось скопировать переменные OVMF"
 
-# Файл-ответ на fat-разделе. Метка обязательна: именно по ней автоустановщик
-# отличает свой носитель от любого другого vfat на машине.
+# Файл-ответ на fat-разделе. Метка короткая: mkfs.fat не принимает имена
+# длиннее 11 символов и отказывается создавать диск. Сам автоустановщик
+# смотрит не на метку, а на наличие byteguru-autoinstall.cfg — иначе случайный
+# vfat-том превращался бы в команду «стирай диск».
 qemu-img create -f raw "$ANSWER_IMG" 32M >/dev/null
-mkfs.vfat -n BG_AUTOINSTALL "$ANSWER_IMG" >/dev/null || die "mkfs.vfat не отработал"
+mkfs.vfat -n BG_INSTALL "$ANSWER_IMG" >/dev/null || die "mkfs.vfat не отработал"
 mkdir -p "$MNT"
 mount -o loop "$ANSWER_IMG" "$MNT" || die "не удалось смонтировать файл-ответ"
 cat > "$MNT/byteguru-autoinstall.cfg" <<CFG
@@ -101,38 +103,71 @@ disk_opts=(-drive "file=$DISK,if=none,id=disk0,format=qcow2" -device virtio-blk-
 # shellcheck disable=SC2054
 answer_opts=(-drive "file=$ANSWER_IMG,if=none,id=ans0,format=raw" -device virtio-blk-pci,drive=ans0)
 
+# Носители с явным порядком загрузки: OVMF берёт его из fw_cfg (bootindex), а
+# «-boot order=d» — соглашение BIOS, которое UEFI-прошивка учитывает настолько,
+# насколько сама сочтёт нужным. Без bootindex пустой целевой диск вполне мог
+# пробоваться раньше ISO, и прогон кончался бы таймаутом без всякой связи с
+# установщиком.
+# shellcheck disable=SC2054
+cd_opts=(-drive "file=$ISO,if=none,id=cd0,media=cdrom,readonly=on"
+	-device "ide-cd-pci,drive=cd0,bootindex=1")
+set_disk_opts() { # set_disk_opts <bootindex>
+	# shellcheck disable=SC2054
+	disk_opts=(-drive "file=$DISK,if=none,id=disk0,format=qcow2"
+		-device "virtio-blk-pci,drive=disk0,bootindex=$1")
+}
+# shellcheck disable=SC2054
+answer_opts=(-drive "file=$ANSWER_IMG,if=none,id=ans0,format=raw"
+	-device virtio-blk-pci,drive=ans0)
+
 run_phase() { # run_phase <лог> <таймаут> <ожидание> <аргументы qemu...>
 	local log_file="$1" timeout_s="$2" needle="$3"; shift 3
-	local deadline=$(( $(date +%s) + timeout_s ))
-	: > "$log_file"
-	timeout --signal=SIGKILL "$timeout_s" qemu-system-x86_64 \
-		-machine q35,accel=kvm:tcg -cpu max -smp 2 -m "$MEMORY_MB" \
-		-display none -no-reboot -monitor none \
-		-serial "file:$log_file" \
-		-netdev user,id=n0 -device virtio-net-pci,netdev=n0 \
-		"${firmware_opts[@]}" "$@" >"${log_file}.qemu" 2>&1 &
-	local qemu_pid=$!
-	while [ "$(date +%s)" -lt "$deadline" ]; do
-		if grep -qa "$needle" "$log_file" 2>/dev/null; then
-			kill "$qemu_pid" 2>/dev/null; wait "$qemu_pid" 2>/dev/null
-			return 0
+	local attempt=1 deadline qemu_pid retry
+	while : ; do
+		retry=0
+		deadline=$(( $(date +%s) + timeout_s ))
+		: > "$log_file"
+		timeout --signal=SIGKILL "$timeout_s" qemu-system-x86_64 \
+			-machine q35,accel=kvm:tcg -cpu max -smp 2 -m "$MEMORY_MB" \
+			-display none -no-reboot -monitor none \
+			-serial "file:$log_file" \
+			-netdev user,id=n0 -device virtio-net-pci,netdev=n0 \
+			"${firmware_opts[@]}" "$@" >"${log_file}.qemu" 2>&1 &
+		qemu_pid=$!
+		while [ "$(date +%s)" -lt "$deadline" ]; do
+			if grep -qa "$needle" "$log_file" 2>/dev/null; then
+				kill "$qemu_pid" 2>/dev/null; wait "$qemu_pid" 2>/dev/null
+				return 0
+			fi
+			if grep -qaE "BYTEGURU-INSTALL-FAIL|BYTEGURU-SESSION-FAIL" "$log_file" 2>/dev/null; then
+				kill "$qemu_pid" 2>/dev/null; wait "$qemu_pid" 2>/dev/null
+				return 1
+			fi
+			if grep -qaE "Kernel panic|VFS: Unable to mount root" "$log_file" 2>/dev/null; then
+				kill "$qemu_pid" 2>/dev/null; wait "$qemu_pid" 2>/dev/null
+				# Под TCG таймерная паника — спор гостя за CPU с параллельной
+				# сборкой, а не дефект образа: тот же образ на свободном хосте
+				# грузится. Одна повторная попытка, дальше — настоящий отказ.
+				if [ "$attempt" -eq 1 ]; then
+					log "паника ядра — повторяю фазу с нуля"
+					attempt=2
+					retry=1
+					break
+				fi
+				return 2
+			fi
+			if ! kill -0 "$qemu_pid" 2>/dev/null; then
+				wait "$qemu_pid" 2>/dev/null
+				return 3
+			fi
+			sleep 5
+		done
+		if [ "$retry" -eq 1 ]; then
+			continue
 		fi
-		if grep -qaE "BYTEGURU-INSTALL-FAIL|BYTEGURU-SESSION-FAIL" "$log_file" 2>/dev/null; then
-			kill "$qemu_pid" 2>/dev/null; wait "$qemu_pid" 2>/dev/null
-			return 1
-		fi
-		if grep -qaE "Kernel panic|VFS: Unable to mount root" "$log_file" 2>/dev/null; then
-			kill "$qemu_pid" 2>/dev/null; wait "$qemu_pid" 2>/dev/null
-			return 2
-		fi
-		if ! kill -0 "$qemu_pid" 2>/dev/null; then
-			wait "$qemu_pid" 2>/dev/null
-			return 3
-		fi
-		sleep 5
+		kill "$qemu_pid" 2>/dev/null; wait "$qemu_pid" 2>/dev/null
+		return 1
 	done
-	kill "$qemu_pid" 2>/dev/null; wait "$qemu_pid" 2>/dev/null
-	return 1
 }
 
 report() { # report <заголовок> <лог>
@@ -141,8 +176,9 @@ report() { # report <заголовок> <лог>
 }
 
 log "фаза 1: установка на виртуальный диск (до ${INSTALL_TIMEOUT} с)"
+set_disk_opts 2
 run_phase "$WORK/install.log" "$INSTALL_TIMEOUT" "BYTEGURU-INSTALL-OK" \
-	"${disk_opts[@]}" "${answer_opts[@]}" -cdrom "$ISO" -boot order=d
+	"${disk_opts[@]}" "${answer_opts[@]}" "${cd_opts[@]}"
 install_rc=$?
 case $install_rc in
 	0) log "ok: система установлена на виртуальный диск" ;;
@@ -156,8 +192,9 @@ case $install_rc in
 esac
 
 log "фаза 2: загрузка с установленного диска (до ${SESSION_TIMEOUT} с)"
+set_disk_opts 1
 run_phase "$WORK/boot.log" "$SESSION_TIMEOUT" "BYTEGURU-SESSION-OK" \
-	"${disk_opts[@]}" -boot order=c
+	"${disk_opts[@]}"
 boot_rc=$?
 case $boot_rc in
 	0) log "ok: установленная система загрузилась и подняла сеанс" ;;
