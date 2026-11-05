@@ -398,7 +398,7 @@ class Panel:
         self._render_tasks()
 
     def _open_launcher(self) -> None:
-        launcher = "bglauncher"
+        launcher = "bgline"
         if self.snapshot is not None:
             launcher = str(self.snapshot.settings.get("launcher") or launcher)
         bggui.run_command(launcher)

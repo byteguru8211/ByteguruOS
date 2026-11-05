@@ -7,12 +7,17 @@ from pathlib import Path
 
 import pytest
 
-from bginstaller import bootrepair, cli, clock, models, planner, probe, safety
-from bginstaller.apply import apply_plan, argv_for, confirm_token
+from bginstaller import bootrepair, cli, clock, models, operations, planner, probe, safety
+from bginstaller.apply import apply_plan, confirm_token
 from bginstaller.errors import ApplyError, BootRepairError, PlanError, ProbeError
 from bginstaller.models import BootMode, FSType, OsKind, Partition, PartitionTable, Profile, WindowsState, GiB, MiB
 
 FIXTURES = Path(__file__).parent / "fixtures"
+
+
+def _discard_writer(path: str, content: str) -> None:
+    """В тестах файл писать не нужно, но он пишется: путь /mnt/target не
+    принадлежит пользователю, и реальный writer упал бы на правах."""
 
 
 def _disk(size_gib: int, partitions: tuple[Partition, ...], table=PartitionTable.GPT) -> models.Disk:
@@ -312,7 +317,8 @@ def test_dry_run_executes_nothing():
     disk = _disk(200, ())
     install_plan = planner.plan(disk)
     calls: list[tuple[str, ...]] = []
-    report = apply_plan(install_plan, apply=False, runner=lambda argv: calls.append(tuple(argv)) or 0)
+    report = apply_plan(install_plan, apply=False,
+        runner=lambda argv, stdin=None: calls.append(tuple(argv)) or 0)
     assert report.dry_run is True
     assert calls == []
     assert report.executed == 0
@@ -323,14 +329,14 @@ def test_apply_runs_in_order_and_stops_on_failure():
     install_plan = planner.plan(disk)
     seen: list[str] = []
 
-    def runner(argv):
+    def runner(argv, stdin=None):
         seen.append(argv[0])
-        return 0 if argv[0] != "bg-image-install" else 3
+        return 0 if argv[0] != "rsync" else 3
 
     report = apply_plan(install_plan, apply=True, runner=runner)
     assert report.ok is False
-    assert "lsblk" in seen
-    assert seen[-1] == "bg-image-install"
+    assert "parted" in seen
+    assert seen[-1] == "rsync"
     assert any(step.failed and step.returncode == 3 for step in report.steps)
 
 
@@ -338,10 +344,45 @@ def test_destructive_step_skipped_without_confirmation():
     disk = _disk(400, (_esp(1), _ntfs(2, 2 * GiB, 300 * GiB)))
     install_plan = planner.plan(disk, windows=WindowsState(present=True))
     executed: list[str] = []
-    report = apply_plan(install_plan, apply=True, runner=lambda argv: executed.append(" ".join(argv)) or 0)
+    report = apply_plan(install_plan, apply=True, writer=_discard_writer,
+        runner=lambda argv, stdin=None: executed.append(" ".join(argv)) or 0)
     assert report.ok is True
     assert not any("ntfsresize" in line for line in executed)
     assert any(step.skipped and "явное подтверждение" in step.note for step in report.steps)
+
+
+def test_confirmed_ntfs_shrink_runs_real_resize():
+    disk = _disk(400, (_esp(1), _ntfs(2, 2 * GiB, 300 * GiB)))
+    install_plan = planner.plan(disk, windows=WindowsState(present=True))
+    shrink = next(action for action in install_plan.actions if action.kind == "shrink-ntfs")
+    executed: list[str] = []
+    report = apply_plan(install_plan, apply=True, writer=_discard_writer,
+        confirmations={shrink.order},
+        runner=lambda argv, stdin=None: executed.append(" ".join(argv)) or 0)
+    assert report.ok is True
+    assert any("ntfsresize --force" in line for line in executed)
+
+
+def test_configure_boot_writes_fstab_and_identity(tmp_path):
+    """Файлы установленной системы: без них fstab/часы/пользователь живут только
+    в голове установщика, а первая же перезагрузка это проверяет."""
+    disk = _disk(200, ())
+    install_plan = planner.plan(disk)
+    ctx = operations.Context(target=str(tmp_path), hostname="guru-os",
+        username="guru", password="pw", timezone="Europe/Moscow")
+    written: dict[str, str] = {}
+
+    def writer(path, content):
+        written[path[len(str(tmp_path)):]] = content
+
+    report = apply_plan(install_plan, apply=True, writer=writer, context=ctx,
+        runner=lambda argv, stdin=None: 0)
+    assert report.ok is True
+    assert "/etc/hostname" in written
+    assert written["/etc/hostname"] == "guru-os\n"
+    fstab = written["/etc/fstab"]
+    assert "LABEL=BG_ROOT" in fstab and "/home" in fstab
+    assert written["/etc/adjtime"].endswith("UTC\n")
 
 
 def test_unknown_action_type_fails_loudly():
@@ -358,7 +399,37 @@ def test_unknown_action_type_fails_loudly():
     report = apply_plan(broken, apply=False)
     assert report.ok is False
     with pytest.raises(ApplyError):
-        argv_for(models.Action(order=1, kind="telepathy", target="x"))
+        operations.commands_for(models.Action(order=1, kind="telepathy", target="x"),
+            install_plan, operations.Context(), operations.State(disk=install_plan.disk))
+
+
+def test_bootloader_installation_follows_system_image():
+    """Загрузчик ставится в уже скопированную систему.
+
+    Порядок «grub-install до переноса rootfs» оставляет машину без загрузки:
+    grub-install в пустой /mnt/target не находит ни /boot, ни модули, и
+    установка «проходит успешно» до первой же перезагрузки.
+    """
+    install_plan = planner.plan(_disk(200, ()))
+    kinds = [action.kind for action in install_plan.actions]
+    assert kinds.index("install-system-image") < kinds.index("install-efi")
+    assert kinds.index("configure-boot") < kinds.index("install-efi")
+    assert kinds.index("install-efi") < kinds.index("finalize")
+
+
+def test_password_reaches_chpasswd_through_stdin_not_argv():
+    """Пароль в списке аргументов видно в /proc и в логе установки."""
+    disk = _disk(200, ())
+    install_plan = planner.plan(disk)
+    ctx = operations.Context(username="guru", password="секрет-пароль")
+    state = operations.State(disk=install_plan.disk)
+    action = next(a for a in install_plan.actions if a.kind == "configure-boot")
+    jobs = operations.commands_for(action, install_plan, ctx, state)
+    flat = " ".join(" ".join(job.argv) for job in jobs)
+    assert "секрет-пароль" not in flat
+    passwd_job = next(job for job in jobs if job.stdin)
+    assert passwd_job.argv[0] == "chroot"
+    assert passwd_job.stdin == "guru:секрет-пароль\n"
 
 
 # -------------------------------------------------------------------------- cli

@@ -1,5 +1,6 @@
 usr/bin/bgpanel usr/bin
 usr/bin/bglauncher usr/bin
+usr/bin/bgline usr/bin
 usr/bin/bgsettings usr/bin
 usr/bin/bgfirstboot usr/bin
 usr/bin/bglock usr/bin

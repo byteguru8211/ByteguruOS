@@ -264,11 +264,10 @@ sync_overlay() {
 	[ -d "${OVERLAY_DIR}" ] || die "нет каталога overlay: ${OVERLAY_DIR}"
 	rm -rf "${INCLUDES_DIR}"
 	mkdir -p "${INCLUDES_DIR}"
-	if command -v rsync >/dev/null 2>&1; then
-		rsync -a "${OVERLAY_DIR}/" "${INCLUDES_DIR}/"
-	else
-		cp -a "${OVERLAY_DIR}/." "${INCLUDES_DIR}/"
-	fi
+	# cp, а не rsync: каталог пересоздаётся целиком, поэтому инкрементальность
+	# rsync здесь не нужна, а сам он умеет зависать на сокетах (в живой сборке
+	# 2026-11-05 rsync -a на 176 КБ простоял 49 минут и не завершился).
+	cp -a "${OVERLAY_DIR}/." "${INCLUDES_DIR}/"
 	# Git на Windows не восстанавливает бит +x (core.filemode=false), а live-build
 	# требует исполняемости auto/config и hooks/*: без этого стадия молча не
 	# запускается. Права выставляем здесь, а не в CI-шаге.

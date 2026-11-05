@@ -1,0 +1,24 @@
+#!/bin/sh
+# Запуск графического установщика с правами администратора.
+#
+# Обёртка нужна из-за pkexec: он намеренно выбрасывает окружение вызывающего,
+# и GTK-окно, запущенное через `pkexec bginstaller`, не находит ни Wayland-сеанс,
+# ни сокет композитора — установщик падает с «cannot open display» ровно в тот
+# момент, когда права уже выданы. Поэтому переменные сеанса передаём явно.
+
+if [ -n "${WAYLAND_DISPLAY:-}" ]; then
+	export GDK_BACKEND=wayland
+fi
+
+if [ "$(id -u)" -eq 0 ]; then
+	exec python3 -m bginstaller.cli --gui "$@"
+fi
+
+exec pkexec \
+	env DISPLAY="${DISPLAY:-}" \
+	WAYLAND_DISPLAY="${WAYLAND_DISPLAY:-}" \
+	XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}" \
+	XDG_SESSION_TYPE="${XDG_SESSION_TYPE:-wayland}" \
+	GDK_BACKEND="${GDK_BACKEND:-wayland}" \
+	PYTHONPATH="${PYTHONPATH:-}" \
+	bginstaller --gui "$@"

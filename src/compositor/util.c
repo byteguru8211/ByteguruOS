@@ -501,7 +501,7 @@ void bgwl_config_load(struct bgwl_config *cfg) {
 	memcpy(cfg->border_color, default_border, sizeof(default_border));
 
 	cfg->terminal = strdup(bgwl_env_string("BGWL_TERMINAL", "foot"));
-	cfg->launcher = strdup(bgwl_env_string("BGWL_LAUNCHER", "bglauncher"));
+	cfg->launcher = strdup(bgwl_env_string("BGWL_LAUNCHER", "bgline"));
 	cfg->file_manager = strdup(bgwl_env_string("BGWL_FILE_MANAGER", "thunar"));
 	cfg->screenshot = strdup(bgwl_env_string("BGWL_SCREENSHOT",
 		"grim -g \"$(slurp)\" ~/Pictures/byteguru-$(date +%%Y%%m%%d-%%H%%M%%S).png"));

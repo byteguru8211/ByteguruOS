@@ -193,7 +193,15 @@ def app_icon(app: Application, size: int = 48) -> str:
 
 
 def coverage_badge(app: Application) -> tuple[str, str]:
-    """(текст, css-класс) для значка уровня покрытия в лаунчере."""
+    """(текст, css-класс) для значка уровня покрытия в лаунчере.
+
+    Значок — про Windows-программы: уровень покрытия описывает, насколько
+    проверен перенос чужого .exe. Нативному приложению вешать «не
+    поддерживается» бессмысленно, поэтому для него возвращаем пустую строку,
+    а вызывающий код просто не рисует виджет.
+    """
+    if not app.needs_windows:
+        return ("", "")
     coverage = (app.coverage or "").lower()
     if not app.supported:
         return ("не поддерживается", "badge-unsupported")

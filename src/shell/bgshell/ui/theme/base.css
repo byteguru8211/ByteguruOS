@@ -193,3 +193,55 @@ window.background,
     border-radius: 10px;
     padding: 8px 12px;
 }
+
+/* ---------------------------------------------------------------- палитра
+   Guru Line — единственное окно, которое появляется по клавише и должно
+   исчезать мгновенно: никакой анимации, только тень и скругление. */
+.bg-palette {
+    background-color: transparent;
+}
+.bg-palette-body {
+    background-color: #181c25;
+    border: 1px solid #2b313c;
+    border-radius: 14px;
+    padding: 6px;
+}
+.bg-palette-entry {
+    font-size: 1.25em;
+    background: transparent;
+    border: none;
+    box-shadow: none;
+    padding: 10px 12px;
+    color: #e0e2e6;
+}
+.bg-palette-list row:selected {
+    background-color: @bg_soft;
+    color: inherit;
+}
+.bg-palette-list row:selected .heading {
+    color: #ffffff;
+}
+.bg-palette-kind {
+    color: @accent_color;
+    font-size: 1.1em;
+    min-width: 18px;
+}
+
+/* Уведомления. Окно не растягивается: иначе GTK даёт поверхности минимум
+   200x200, и прозрачная полоса под карточкой перехватывает клики по окнам
+   под ней. */
+.bg-notifications {
+    background-color: transparent;
+}
+.bg-card {
+    padding: 10px 12px;
+}
+.bg-notify-critical {
+    border-left: 3px solid #ff6b6b;
+}
+.bg-notify-normal {
+    border-left: 3px solid @accent_color;
+}
+.bg-notify-low {
+    border-left: 3px solid @bg_border;
+}

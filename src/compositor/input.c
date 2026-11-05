@@ -46,6 +46,7 @@ static const struct {
 	const char *action;
 } builtin_bindings[] = {
 	{ WLR_MODIFIER_LOGO, KEY_ENTER, "terminal" },
+	{ WLR_MODIFIER_LOGO, KEY_ESC, "launcher" },
 	{ WLR_MODIFIER_LOGO, KEY_E, "file-manager" },
 	{ WLR_MODIFIER_LOGO, KEY_L, "lock" },
 	{ WLR_MODIFIER_LOGO, KEY_PRINT, "screenshot" },

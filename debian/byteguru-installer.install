@@ -1,2 +1,3 @@
 usr/bin/bginstaller usr/bin
+usr/bin/bginstaller-gui usr/bin
 usr/lib/python3/dist-packages/bginstaller usr/lib/python3/dist-packages

@@ -39,11 +39,15 @@ def build_window(application) -> object:
 
     scroller = Gtk.ScrolledWindow()
     scroller.set_vexpand(True)
+    # Горизонтального скролла нет: столбцы делят ширину окна поровну, поэтому
+    # сетка никогда не «уезжает» за край на узком экране.
+    scroller.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
     box.append(scroller)
 
     grid = Gtk.Grid()
     grid.set_column_spacing(12)
     grid.set_row_spacing(12)
+    grid.set_column_homogeneous(True)
     grid.set_margin_top(8)
     grid.set_margin_bottom(16)
     scroller.set_child(grid)

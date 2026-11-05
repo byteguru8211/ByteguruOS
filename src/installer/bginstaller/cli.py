@@ -11,6 +11,7 @@ import json
 import sys
 from pathlib import Path
 
+from bginstaller import operations
 from bginstaller.apply import apply_plan, confirm_token
 from bginstaller.bootrepair import diagnose, next_boot_command, parse_efibootmgr, repair_commands, windows_boot_index
 from bginstaller.clock import explain, plan_for
@@ -171,19 +172,44 @@ def cmd_check(args: argparse.Namespace) -> int:
 def cmd_apply(args: argparse.Namespace) -> int:
     disk, hinted = _load_description(Path(args.disk_file))
     windows = hinted or detect_windows(disk)
-    install_plan = plan(
-        disk,
-        windows=windows,
-        profile=Profile(args.profile),
-        boot_mode=BootMode(args.boot),
-        mem_bytes=args.memory_gib * GiB,
-    )
+    if args.erase:
+        install_plan = plan_erase_and_install(disk,
+            profile=Profile(args.profile), boot_mode=BootMode(args.boot))
+    else:
+        install_plan = plan(
+            disk,
+            windows=windows,
+            profile=Profile(args.profile),
+            boot_mode=BootMode(args.boot),
+            mem_bytes=args.memory_gib * GiB,
+        )
     if not args.apply:
         print("только проба: изменения потребуют --apply и токен подтверждения")
     confirmed = set()
     if args.confirm_token == confirm_token(install_plan):
         confirmed = {action.order for action in install_plan.actions if action.requires_confirmation}
-    report = apply_plan(install_plan, apply=args.apply, confirmations=confirmed)
+    password = ""
+    if args.password_file:
+        # Пароль из файла, а не из аргумента: argv виден в /proc всем, кто
+        # сидит за этой машиной, и попадает в историю оболочки.
+        password = Path(args.password_file).read_text(encoding="utf-8").rstrip("\n")
+    context = operations.Context(
+        hostname=args.hostname,
+        username=args.user,
+        password=password,
+        autologin=not args.no_autologin,
+        language=args.language,
+        keyboard=args.keyboard,
+        timezone=args.timezone,
+        target=args.target,
+        image=args.image,
+    )
+    if args.apply and args.user and not password:
+        print("не создаём пользователя: пароль не задан (--password-file)",
+            file=sys.stderr)
+        return 2
+    report = apply_plan(install_plan, apply=args.apply, confirmations=confirmed,
+        context=context)
     print(report.as_text())
     return 0 if report.ok else 1
 
@@ -259,6 +285,20 @@ def build_parser() -> argparse.ArgumentParser:
     common(apply_cmd)
     apply_cmd.add_argument("--apply", action="store_true", help="выполнить команды реально")
     apply_cmd.add_argument("--confirm-token", default="")
+    apply_cmd.add_argument("--erase", action="store_true",
+        help="полная затирка диска вместо соседства с тем, что на нём есть")
+    apply_cmd.add_argument("--user", default="", help="логин создаваемого пользователя")
+    apply_cmd.add_argument("--password-file", default="",
+        help="файл с паролем; пароль не должен появляться в командной строке")
+    apply_cmd.add_argument("--hostname", default="byteguru")
+    apply_cmd.add_argument("--timezone", default="Europe/Moscow")
+    apply_cmd.add_argument("--keyboard", default="ru")
+    apply_cmd.add_argument("--language", default="ru_RU.UTF-8")
+    apply_cmd.add_argument("--target", default=operations.TARGET,
+        help="куда устанавливать")
+    apply_cmd.add_argument("--image", default="",
+        help="squashfs с rootfs; без него переносим живую систему rsync-ом")
+    apply_cmd.add_argument("--no-autologin", action="store_true")
     apply_cmd.set_defaults(func=cmd_apply)
 
     repair = sub.add_parser("boot-repair", help="восстановить загрузочную запись после Windows")
@@ -277,12 +317,21 @@ def build_parser() -> argparse.ArgumentParser:
     clock.add_argument("--windows", action="store_true")
     clock.add_argument("--policy", choices=["utc", "localtime", ""], default="")
     clock.set_defaults(func=cmd_clock)
+
+    parser.add_argument("--gui", action="store_true",
+        help="окно установщика вместо разовых команд")
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    if args.gui:
+        # Импорт внутри: GTK тянет gi и дисплейный сеанс, а CLI-команды
+        # (probe/plan/check) должны работать и на headless-машине без X/Wayland.
+        from bginstaller.ui import installer as installer_ui
+
+        return installer_ui.main([])
     if getattr(args, "version", False) or not args.command:
         from bginstaller import __version__
 

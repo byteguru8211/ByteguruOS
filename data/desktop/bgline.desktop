@@ -1,0 +1,14 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Guru Line
+Name[ru]=Строка Guru
+GenericName=Палитра действий
+GenericName[en]=Action palette
+Comment=Одна строка: программы, потоки, настройки сеанса
+Exec=bgline
+Icon=system-search
+Terminal=false
+Categories=Utility;GTK;
+StartupWMClass=bgline
+Keywords=команды;палитра;поиск;поток;настройка;

@@ -1,0 +1,15 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Install ByteguruOS
+Name[ru]=Установить ByteguruOS
+GenericName=Installer
+GenericName[ru]=Установщик системы
+Comment=Установка на диск, соседство с Windows и ремонт загрузки
+Comment[ru]=Установка на диск, соседство с Windows и ремонт загрузки
+Exec=bginstaller-gui
+Icon=drive-harddisk
+Terminal=false
+Categories=System;Settings;
+StartupWMClass=bginstaller
+Keywords=установка;диск;windows;загрузчик;

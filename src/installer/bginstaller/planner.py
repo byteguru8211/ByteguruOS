@@ -325,9 +325,10 @@ def _ordered_actions(
             label,
         )
 
-    add("install-efi", disk.device, "--mode", boot_mode.value,
-        "--reuse-esp", "yes" if layout.reuse_esp else "no")
-    add("write-loader-entry", disk.device, "--name", "ByteguruOS", "--set-default", "yes")
+    # Порядок здесь — не косметика: grub-install и efibootmgr работают только
+    # тогда, когда целевая система уже смонтирована и скопирована. Installer,
+    # который ставит загрузчик до переноса rootfs, оставляет машину без
+    # загрузки, и «переустановить» — единственное лечение.
     add("mount-target", disk.device, "--root", "/mnt/target")
     add("install-system-image", "/mnt/target", "--profile", profile.value)
     add(
@@ -336,6 +337,9 @@ def _ordered_actions(
         "--time-policy",
         "localtime-if-windows" if windows.present else "utc",
     )
+    add("install-efi", disk.device, "--mode", boot_mode.value,
+        "--reuse-esp", "yes" if layout.reuse_esp else "no")
+    add("write-loader-entry", disk.device, "--name", "ByteguruOS", "--set-default", "yes")
     add("install-boot-repair", "/mnt/target", "--package", "byteguru-boot")
     add("finalize", "/mnt/target", "--sync", "--umount")
     return actions
