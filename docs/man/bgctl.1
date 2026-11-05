@@ -1,0 +1,106 @@
+.\" bgctl.1 — клиент сокета управления композитором
+.\" Источник истины: bin/bgctl и src/compositor/ctl.c.
+.TH BGCTL 1 "ноябрь 2026" "bgctl 1.0.0" "ByteguruOS"
+.SH NAME
+bgctl \- управление сеансом ByteguruOS из терминала и скриптов
+.SH СИНТАКСИС
+.B bgctl
+.RB [ \-\-json ]
+.I команда
+.RI [ аргументы ]
+.SH ОПИСАНИЕ
+Обёртка над сокетом управления композитора
+.IR $XDG_RUNTIME_DIR/byteguru/compositor.sock .
+Один вызов — одна команда — один снимок состояния в ответ, поэтому
+.B bgctl
+пригоден и как отладочный инструмент, и как способ собрать отчёт о сеансе.
+
+Флаг
+.B \-\-json
+работает и до имени команды, и после неё:
+.PP
+.RS
+.B bgctl \-\-json status
+.br
+.B bgctl status \-\-json
+.RE
+.PP
+Это не косметика: в скриптах чаще пишут первую форму, а argparse с
+подкомандами по умолчанию затирает флаг, указанный до них.
+.SH КОМАНДЫ
+.TP
+.B status
+Снимок сеанса: экраны, потоки с их раскладками и акцентами, окна активного
+потока, состояние блокировки и панели. С
+.B \-\-json
+— машиночитаемо.
+.TP
+.BI "events"
+Печатать события композитора (\fIEV workspace\fR, \fIEV window\fR, \fIEV lock\fR
+и другие) до Ctrl+C. Полезно, чтобы увидеть, что именно оболочка получает на
+самом деле.
+.TP
+.BI "command " "СТРОКА"
+Команда протокола как есть — на случай, если нужной подкоманды ещё нет.
+.TP
+.BI "workspace " "индекс|next|prev"
+Переключить поток.
+.TP
+.BI "send " индекс
+Отправить активное окно в поток.
+.TP
+.BI "focus " id
+Сфокусировать окно по его идентификатору из
+.BR status .
+.TP
+.BI "set " "настройка значение"
+Изменить настройку на лету: \fIgap-inner\fR, \fIgap-outer\fR,
+\fIborder-width\fR, \fIlayout\fR, \fIws-layout\fR, \fIanimations\fR,
+\fIfocus-follows-mouse\fR, \fIaccent\fR, \fImaster-pct\fR, \fImaster-count\fR.
+.TP
+.BI "run " действие
+Вызвать действие сеанса: \fIlauncher\fR, \fIterminal\fR, \fIfile-manager\fR,
+\fIscreenshot\fR, \fIlock\fR или команду из конфигурации.
+.TP
+.BR close ", " maximize ", " fullscreen ", " pin ", " reflow
+Действия над активным окном; \fIreflow\fR перекладывает окна потока по
+текущей раскладке.
+.TP
+.BI "lock " "begin|end"
+Заблокировать сеанс и снять блокировку. \fIend\fR имеет смысл только для
+тестов и восстановления: настоящий разблокировщик —
+.BR bglock (1).
+.TP
+.B quit
+Завершить сеанс.
+.SH ФОРМАТ ОТВЕТА
+JSON с полями \fItype\fR, \fIcompositor\fR, \fIlocked\fR,
+\fIpanel_visible\fR, \fIsettings\fR, \fIstreams\fR, \fIoutputs\fR,
+\fIwindows\fR, \fIfocused\fR. Окна содержат \fIid\fR, \fIapp_id\fR,
+\fItitle\fR, \fIpid\fR, \fIbox\fR, \fIaccent\fR и флаги \fItiled\fR,
+\fImaximized\fR, \fIfullscreen\fR, \fIabove\fR, \fIsticky\fR,
+\fIdecorated\fR, \fIfocused\fR, \fImapped\fR.
+.SH КОД ВЫХОДА
+0 — команда выполнена; 1 — композитор не ответил или отклонил команду;
+2 — сокет не найден (значит, сеанс
+.B bgwl-session
+не запущен или запущен от другого пользователя).
+.SH ПРИМЕРЫ
+Показать, сколько окон в каждом потоке:
+.PP
+.RS
+bgctl --json status | python3 -c 'import json,sys;
+[print(s["index"], s["name"], s["windows"]) for s in json.load(sys.stdin)["streams"]]'
+.RE
+.PP
+Сделать зазоры крупнее и переложить окна:
+.PP
+.RS
+bgctl set gap-inner 12 && bgctl reflow
+.RE
+.SH "СМОТРИ ТАКЖЕ"
+.BR bgwl (1),
+.BR bgline (1),
+.BR bgpanel (1)
+.SH УЧАСТКИ
+Apache-2.0.

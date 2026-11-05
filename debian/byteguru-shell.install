@@ -8,3 +8,8 @@ usr/bin/bgnote usr/bin
 usr/bin/bgctl usr/bin
 usr/bin/bgwl-session usr/bin
 usr/lib/python3/dist-packages/bgshell usr/lib/python3/dist-packages
+usr/share/man/man1/bgctl.1 usr/share/man/man1
+usr/share/man/man1/bgline.1 usr/share/man/man1
+usr/share/man/man1/bgpanel.1 usr/share/man/man1
+usr/share/man/man1/bgsettings.1 usr/share/man/man1
+usr/share/man/man1/bgwl-session.1 usr/share/man/man1

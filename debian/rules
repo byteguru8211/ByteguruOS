@@ -40,6 +40,14 @@ override_dh_auto_install:
 	cp -a data/wayland-sessions/*.desktop $(TMP)/usr/share/wayland-sessions/
 	cp -a data/systemd/user/*.service $(TMP)/usr/lib/systemd/user/
 
+	# Справочные страницы. Копируем, а не dh_installman: страницы живут в
+	# docs/man и относятся к разным пакетам, а .man-файлы debhelper только
+	# удваивали бы список того, что и так видно по имени. dh_compress
+	# сожмёт их сам, на этапе после dh_install.
+	mkdir -p $(TMP)/usr/share/man/man1 $(TMP)/usr/share/man/man8
+	cp -a docs/man/*.1 $(TMP)/usr/share/man/man1/ 2>/dev/null || true
+	cp -a docs/man/*.8 $(TMP)/usr/share/man/man8/ 2>/dev/null || true
+
 override_dh_dwz:
 	# dwz на python-пакетах без debug-символов только шумит; выключен явно,
 	# чтобы сборка в контейнере не зависела от наличия dwz.

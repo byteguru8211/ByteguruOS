@@ -1,2 +1,3 @@
 usr/bin/bgd usr/bin
 usr/lib/python3/dist-packages/bgd usr/lib/python3/dist-packages
+usr/share/man/man1/bgd.1 usr/share/man/man1

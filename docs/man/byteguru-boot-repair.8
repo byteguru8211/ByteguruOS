@@ -1,0 +1,50 @@
+.\" byteguru-boot-repair.8 — ремонт EFI-записи после Windows
+.TH BYTEGURU-BOOT-REPAIR 8 "ноябрь 2026" "ByteguruOS 1.0.0" "ByteguruOS"
+.SH NAME
+byteguru-boot-repair, byteguru-boot-status \- проверка и восстановление записи загрузки
+.SH СИНТАКСИС
+.B byteguru-boot-status
+.br
+.B byteguru-boot-repair
+.RB [ \-\-dry-run ]
+.RB [ \-\-apply ]
+.SH ОПИСАНИЕ
+Windows умеет перезаписать UEFI BootOrder при крупном обновлении, и тогда
+компьютер возвращается в Windows, а ByteguruOS остаётся на диске без
+упоминания в прошивке. Эти две утилиты делают реакцию на это штатной:
+одна показывает состояние, вторая чинит его, по умолчанию — только
+показывая команды.
+.SH КОМАНДЫ
+.TP
+.B byteguru-boot-status
+Что видит прошивка: порядок загрузки, записи ByteguruOS и Windows, режим
+Secure Boot, состояние NVRAM.
+.TP
+.B byteguru-boot-repair
+Восстановить запись загрузки.
+.B \-\-dry-run
+(поведение по умолчанию) печатает, что будет сделано;
+.B \-\-apply
+исполняет.
+.SH ДИАГНОСТИКА
+Запись существует, но не в начале BootOrder — достаточно переставить
+порядок, и это не считается повреждением.
+Записи нет вовсе — её создаёт
+.IR bginstaller ,
+либо
+.BR "bginstaller boot-repair" .
+Прошивка не принимает NVRAM-записи (некоторые машины после сброса
+параметров) — остаётся путь \fI\\EFI\\boot\\bootx64.efi\fR, который
+.B grub-install
+умеет писать съёмным носителем; в конфигурации это
+\fI\-\-removable\fR.
+.SH ФАЙЛЫ
+.TP
+.I /usr/share/byteguru/efi/efi-boot-policy.env
+Политика: какие записи считаются своими, какие трогать нельзя
+(\fIBYTEGURU_EFI_PROTECTED\fR), сколько повторов проверки.
+.SH "СМОТРИ ТАКЖЕ"
+.BR bginstaller (8),
+.BR bgwl (1)
+.SH УЧАСТКИ
+Apache-2.0.

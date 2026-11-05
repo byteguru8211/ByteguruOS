@@ -418,3 +418,24 @@ def test_bgctl_exposes_run_action():
     bgctl = _load_bgctl()
     args = bgctl.build_parser().parse_args(["run", "launcher"])
     assert args.template == "run {}"
+
+
+def test_every_man_page_is_installed_by_some_package():
+    """Справочная страница, не попавшая в пакет, равна её отсутствию.
+
+    В live-сессии `man bginstaller` — единственный способ прочитать про
+    токены подтверждения и флаги apply, а ISO пересобирается не ради
+    документации. Значит страница обязана быть в .deb, и проверять это
+    нужно в обычном прогоне тестов.
+    """
+    root = Path(__file__).resolve().parent.parent
+    installed = set()
+    for listing in (root / "debian").glob("*.install"):
+        for line in listing.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line and not line.startswith("#"):
+                installed.add(line.split()[0])
+    pages = sorted(p.name for p in (root / "docs" / "man").iterdir())
+    missing = [name for name in pages
+        if f"usr/share/man/man{name[-1]}/{name}" not in installed]
+    assert not missing, f"страницы не установлены ни одним пакетом: {missing}"
