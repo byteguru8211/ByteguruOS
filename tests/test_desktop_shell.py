@@ -7,6 +7,7 @@
 """
 
 import json
+import re
 import os
 import socket
 import sys
@@ -439,3 +440,72 @@ def test_every_man_page_is_installed_by_some_package():
     missing = [name for name in pages
         if f"usr/share/man/man{name[-1]}/{name}" not in installed]
     assert not missing, f"страницы не установлены ни одним пакетом: {missing}"
+
+
+# ------------------------------------------------------------- документация
+def _docs_files(root: Path):
+    return [p for p in [root / "README.md", root / "CONTRIBUTING.md",
+        *sorted((root / "docs").rglob("*.md"))] if p.is_file()]
+
+
+def test_man_references_point_to_existing_pages():
+    """`man bginstaller` в тексте обязан вести на существующую страницу.
+
+    Документация обещает справку в терминале; ссылка на несуществующую
+    страницу — это ровно то, что пользователь проверяет первым и что ломается
+    незаметно, потому что текст при этом читается правильно.
+    """
+    root = Path(__file__).resolve().parent.parent
+    pages = {p.name for p in (root / "docs" / "man").iterdir()}
+    stems = {name.rsplit(".", 1)[0] for name in pages}
+    missing = set()
+    for doc in _docs_files(root):
+        text = doc.read_text(encoding="utf-8", errors="replace")
+        for reference in re.findall(r"`man ([a-z0-9-]+)`", text):
+            if reference not in stems:
+                missing.add(f"{doc.relative_to(root)}: man {reference}")
+    assert not missing, sorted(missing)
+
+
+def test_commands_in_documented_examples_exist():
+    """Команды из блоков `sh` в документации должны существовать.
+
+    Проверка по всей прозе была бы шумом: там осознанно упоминаются имена,
+    которых нет (история дефекта про bg-mount-target читается правильно).
+    А пример из code fence копируют в терминал — выдуманная команда в нём
+    стоит читателю потерянного вечера.
+    """
+    root = Path(__file__).resolve().parent.parent
+    ours = {p.name for p in (root / "bin").iterdir()}
+    ours |= {p.name for p in (root / "iso" / "overlay" / "usr" / "local"
+        / "bin").iterdir()}
+    ours |= {p.name for p in (root / "iso" / "overlay" / "usr" / "local"
+        / "sbin").iterdir()}
+    # Внешние утилиты, которые документация имеет право показывать: они
+    # приходят с Debian, а не с этим репозиторием.
+    external = {"apt-get", "bash", "python", "python3", "pip", "pytest", "git",
+        "ls", "lsblk", "lsmod", "meson", "ninja", "pkg-config", "efibootmgr",
+        "grub-install", "mount", "umount", "sudo", "mkdir", "cat", "pgrep",
+        "journalctl", "man", "systemctl", "systemd-detect-virt", "pkexec",
+        "grim", "notify-send", "udisksctl", "partprobe", "udevadm",
+        "sha256sum", "Get-FileHash"}
+    unknown = set()
+    for doc in _docs_files(root):
+        text = doc.read_text(encoding="utf-8", errors="replace")
+        for block in re.findall(r"```(?:sh|bash|powershell)\n(.*?)```", text, re.S):
+            for line in block.splitlines():
+                line = line.strip().lstrip("$").strip()
+                if not line or line.startswith("#"):
+                    continue
+                # Префиксы окружения (PYTHONPATH=... python -m ...) — не команда.
+                while re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", line):
+                    parts = line.split(None, 1)
+                    line = parts[1] if len(parts) == 2 else ""
+                if not line:
+                    continue
+                first = line.split()[0].rstrip("\\")
+                if first.startswith(("-", "|", "&&")):
+                    continue
+                if first not in ours | external:
+                    unknown.add(f"{doc.relative_to(root)}: {first}")
+    assert not unknown, sorted(unknown)

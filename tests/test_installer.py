@@ -675,7 +675,7 @@ def test_bios_boot_partition_appears_only_for_legacy_gpt():
     съесть место без причины.
     """
     legacy = planner.plan(_disk(60, ()), profile=Profile.KIOSK,
-        boot_mode=BootMode.LEGACY)
+        boot_mode=BootMode.LEGACY, i386_modules=True)
     bios = [a for a in legacy.actions if a.kind == "create-partition"
         and "--type" in a.arguments and "bios" in a.arguments]
     assert len(bios) == 1
@@ -687,7 +687,7 @@ def test_bios_boot_partition_appears_only_for_legacy_gpt():
         and "bios" in a.arguments]
 
     mbr = planner.plan(_disk(60, (), table=PartitionTable.MBR),
-        profile=Profile.KIOSK, boot_mode=BootMode.LEGACY)
+        profile=Profile.KIOSK, boot_mode=BootMode.LEGACY, i386_modules=True)
     assert not [a for a in mbr.actions if "--type" in a.arguments
         and "bios" in a.arguments]
 
@@ -695,7 +695,7 @@ def test_bios_boot_partition_appears_only_for_legacy_gpt():
 def test_bios_partition_is_flagged_not_formatted():
     disk = _disk(60, ())
     install_plan = planner.plan(disk, profile=Profile.KIOSK,
-        boot_mode=BootMode.LEGACY)
+        boot_mode=BootMode.LEGACY, i386_modules=True)
     action = next(a for a in install_plan.actions if a.kind == "create-partition"
         and "bios" in a.arguments)
     jobs = operations.commands_for(action, install_plan, operations.Context(),
@@ -703,3 +703,19 @@ def test_bios_partition_is_flagged_not_formatted():
     flat = [" ".join(job.argv) for job in jobs if job.argv]
     assert any("set 1 bios_grub on" in line or "bios_grub on" in line for line in flat)
     assert not any("mkfs" in line for line in flat)
+
+
+def test_legacy_boot_refuses_without_modules():
+    """Отказ должен случиться до разметки, а не после переноса системы.
+
+    К шагу загрузчика диск уже размечен, rootfs перенесён и fstab записан:
+    «не удалось поставить загрузчик» там означает машину, которая не
+    стартует, с данными на месте. Тот же отказ на этапе плана стоит
+    пользователю ноль.
+    """
+    with pytest.raises(PlanError, match="BIOS-загрузка невозможна"):
+        planner.plan(_disk(60, ()), profile=Profile.KIOSK,
+            boot_mode=BootMode.LEGACY, i386_modules=False)
+    # UEFI-путь проверкой не задевается.
+    assert planner.plan(_disk(60, ()), profile=Profile.KIOSK,
+        boot_mode=BootMode.UEFI).actions
