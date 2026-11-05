@@ -1,0 +1,40 @@
+#!/bin/sh
+# 0100-byteguru-grub-timeout.binary — UEFI-меню образа обязано стартовать само.
+#
+# Зачем: live-build копирует шаблон config.cfg дословно, и в нём задан только
+# default=0 — таймаута нет. GRUB без таймаута ждёт нажатия бесконечно. Для
+# человека это «образ завис на чёрном экране с меню», а для проверки установки
+# на диск — прогон, который никогда не стартует: в UEFI (VirtualBox в EFI-режиме,
+# реальные машины, headless-тест) никто клавишу не нажмёт.
+#
+# Проверено на QEMU 10.0 + OVMF: без нажатия serial-лог останавливается на
+# строке «BdsDxe: starting Boot0001 UEFI QEMU DVD-ROM», после sendkey ret ядро
+# стартует. То есть меню действительно висело, а не образ не грузился.
+#
+# Хук именно типа binary, а не chroot: он правит дерево binary/ после того,
+# как live-build сгенерировал загрузчик (binary_grub-pc), но до сборки ISO
+# (binary_iso) — раньше править нечего, позже уже нечего править. Рабочий
+# каталог при запуске — сам binary/.
+#
+# BIOS-путь не трогаем: isolinux.cfg с prompt 0 и timeout 0 стартует сразу.
+
+set -eu
+
+CONFIG="boot/grub/config.cfg"
+
+if [ ! -f "${CONFIG}" ]; then
+	echo "[byteguru-hook] нет ${CONFIG}: структура образа не та, что ожидалось" >&2
+	exit 1
+fi
+
+if grep -q "^set timeout=" "${CONFIG}"; then
+	echo "[byteguru-hook] таймаут GRUB уже задан — не трогаем"
+	exit 0
+fi
+
+# Пять секунд: довольно и человеку прочитать меню, и машине загрузиться самой.
+# timeout_style=menu — чтобы меню оставалось видимым, а не превращалось в
+# бегущую строку счётчика.
+printf '\nset timeout=5\nset timeout_style=menu\n' >> "${CONFIG}"
+
+echo "[byteguru-hook] GRUB: автозапуск через 5 с (${CONFIG})"
