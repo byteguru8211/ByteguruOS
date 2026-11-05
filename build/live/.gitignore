@@ -28,3 +28,4 @@ chroot.files
 chroot.packages.*
 chroot.installed_tmp_pkgs
 .lock
+binary.modified_timestamps
