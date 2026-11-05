@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from pathlib import Path
 
 from bginstaller.errors import PlanError
 from bginstaller.models import (
@@ -128,6 +129,37 @@ def _fit_sizing(sizing: Sizing, room: int, esp_cost: int) -> Sizing | None:
 def minimum_room() -> int:
     """Минимум, ниже которого установка невозможна ни при каком профиле."""
     return ROOT_FLOOR + VAR_FLOOR + SWAP_FLOOR + 1 * GiB
+
+
+def _has_i386_modules(path: str = "/usr/lib/grub/i386-pc") -> bool:
+    return Path(path).is_dir()
+
+
+def _require_boot_support(boot_mode: BootMode,
+        i386_modules: bool | None = None) -> None:
+    """BIOS-загрузка требует модулей i386-pc — и их не может быть в live-образе.
+
+    Проверка стоит здесь, а не в момент grub-install, по одной причине: к шагу
+    загрузчика диск уже размечен, система перенесена и fstab записан. Отказ
+    тогда означает «машина не стартует, а данные уже на месте», и лечится он
+    только переустановкой. Отказ на этапе плана стоит пользователю ноль.
+
+    grub-pc нельзя положить в образ вместе с grub-efi-amd64: они объявлены
+    Conflicts друг к другу, и сборка падает на неразрешимой паре. Поэтому
+    путь для BIOS — ставить модули в целевой системе из репозитория, а не
+    рассчитывать на live-сессию.
+    """
+    if boot_mode is not BootMode.LEGACY:
+        return
+    if i386_modules is None:
+        i386_modules = _has_i386_modules()
+    if not i386_modules:
+        raise PlanError(
+            "BIOS-загрузка невозможна: нет модулей grub i386-pc. В live-образе"
+            " их быть не может (grub-pc конфликтует с grub-efi-amd64), поэтому"
+            " используйте --boot uefi либо установите grub-pc в целевую систему"
+            " из репозитория"
+        )
 
 
 def suggest_profile(disk: Disk, *, windows_present: bool = False,
@@ -445,7 +477,7 @@ def _ordered_actions(
             "fat32",
             # 11 символов — жёсткий предел метки FAT: mkfs.fat обрезает более
             # длинные, и mount по LABEL=BYTEGURU_EFI (12) не находил том,
-            # который только что создал.
+            # который только что создал. Новая метка — BYTEGURU_OS, ровно 11.
             "--label",
             "BYTEGURU_OS",
         )
@@ -497,9 +529,11 @@ def plan(
     on_removable: bool = False,
     battery: bool = False,
     ignore_gates: bool = False,
+    i386_modules: bool | None = None,
 ) -> InstallPlan:
     """Собрать план установки. Блокирующие замечания не дают собрать план вовсе."""
     windows = windows or WindowsState()
+    _require_boot_support(boot_mode, i386_modules)
     sizing = SIZINGS[profile]
     layout = _allocate(disk, windows, sizing, boot_mode)
     gates = evaluate(
@@ -530,11 +564,14 @@ def plan(
     )
 
 
-def plan_erase_and_install(disk: Disk, *, profile: Profile, boot_mode: BootMode = BootMode.UEFI) -> InstallPlan:
+def plan_erase_and_install(disk: Disk, *, profile: Profile,
+        boot_mode: BootMode = BootMode.UEFI,
+        i386_modules: bool | None = None) -> InstallPlan:
     """Полная затирка диска. Отдельная функция, чтобы её нельзя было вызвать по недосмотру."""
     if not disk.partitions:
         raise PlanError("нужен диск с существующими разделами: для чистого диска используйте plan()")
     clean = replace(disk, partitions=())
+    _require_boot_support(boot_mode, i386_modules)
     sizing = SIZINGS[profile]
     esp_cost = _esp_bytes(clean) if boot_mode is BootMode.UEFI else 0
     overhead = esp_cost + _bios_cost(clean, boot_mode)
