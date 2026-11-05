@@ -66,40 +66,53 @@ umount "$MNT"
 # 2026-11-05: сеанс не поднимался, хотя образ грузился корректно).
 APPEND="boot=live components hostname=byteguru username=byteguru console=ttyS0,115200"
 
-log "запуск QEMU (до ${TIMEOUT_SECONDS} с), лог: $LOG"
 # q35 вместо i440FX: на i440FX ядро паникует «IO-APIC + timer doesn't work»
-# устойчиво. С q35 та же паника осталась, но только когда хост загружен сборкой
-# одновременно с прогоном: под TCG таймеры гостя зависят от того, успевают ли
-# его потоки на CPU. Отсюда правило — прогон не запускают параллельно со
-# сборкой, а тест обязан это заметить, а не молча досидеть до таймаута.
-timeout --signal=SIGKILL "$TIMEOUT_SECONDS" qemu-system-x86_64 \
-	-machine q35,accel=kvm:tcg -cpu max -smp 2 -m "$MEMORY_MB" \
-	-vga std -display none -no-reboot -no-shutdown \
-	-cdrom "$ISO" -boot d \
-	-kernel "$WORK/vmlinuz" -initrd "$WORK/initrd.img" \
-	-append "$APPEND" \
-	-serial "file:$LOG" -monitor none \
-	-netdev user,id=n0 -device virtio-net-pci,netdev=n0 \
-	>"$WORK/qemu.out" 2>&1 &
-qemu_pid=$!
+# устойчиво. С q35 та же паника осталась, но только когда хост занят: под TCG
+# таймеры гостя зависят от того, успевают ли его потоки на CPU, и проигрывают
+# сборке образа, запущенной рядом. Это среда, а не образ, поэтому у паники
+# есть одна повторная попытка — и только потом она становится результатом.
+attempt=1
+while : ; do
+	started=$(date +%s)
+	log "запуск QEMU (попытка ${attempt}, до ${TIMEOUT_SECONDS} с), лог: $LOG"
+	: > "$LOG"
+	timeout --signal=SIGKILL "$TIMEOUT_SECONDS" qemu-system-x86_64 \
+		-machine q35,accel=kvm:tcg -cpu max -smp 2 -m "$MEMORY_MB" \
+		-vga std -display none -no-reboot -no-shutdown \
+		-cdrom "$ISO" -boot d \
+		-kernel "$WORK/vmlinuz" -initrd "$WORK/initrd.img" \
+		-append "$APPEND" \
+		-serial "file:$LOG" -monitor none \
+		-netdev user,id=n0 -device virtio-net-pci,netdev=n0 \
+		>"$WORK/qemu.out" 2>&1 &
+	qemu_pid=$!
 
-# Ждём не весь таймаут, а до первого вердикта. Само-проверка образа сама
-# говорит «OK» или «FAIL», и ждать после неё ещё полчаса — значит сделать
-# самый медленный шаг CI ещё и бесполезным. Паника ядра прерывает прогон по
-# той же причине: она не разрешится сама.
-deadline=$(( $(date +%s) + TIMEOUT_SECONDS ))
-while [ "$(date +%s)" -lt "$deadline" ]; do
-	if ! kill -0 "$qemu_pid" 2>/dev/null; then
-		break
+	# Ждём не весь таймаут, а до первого вердикта. Само-проверка образа сама
+	# говорит «OK» или «FAIL», и ждать после неё ещё полчаса — значит сделать
+	# самый медленный шаг CI ещё и бесполезным. Паника ядра прерывает прогон по
+	# той же причине: она не разрешится сама.
+	deadline=$(( started + TIMEOUT_SECONDS ))
+	while [ "$(date +%s)" -lt "$deadline" ]; do
+		if ! kill -0 "$qemu_pid" 2>/dev/null; then
+			break
+		fi
+		if grep -qaE "BYTEGURU-SESSION-(OK|FAIL)|Kernel panic|VFS: Unable to mount root" "$LOG" 2>/dev/null; then
+			kill "$qemu_pid" 2>/dev/null
+			break
+		fi
+		sleep 5
+	done
+	wait "$qemu_pid" 2>/dev/null
+	rc=$?
+	ELAPSED=$(( $(date +%s) - started ))
+
+	if [ "$attempt" -eq 1 ] && grep -qa "IO-APIC + timer doesn't work" "$LOG" 2>/dev/null; then
+		log "паника таймеров TCG — повторяю прогон; дождитесь, пока хост освободится"
+		attempt=2
+		continue
 	fi
-	if grep -qaE "BYTEGURU-SESSION-(OK|FAIL)|Kernel panic|VFS: Unable to mount root" "$LOG" 2>/dev/null; then
-		kill "$qemu_pid" 2>/dev/null
-		break
-	fi
-	sleep 5
+	break
 done
-wait "$qemu_pid" 2>/dev/null
-rc=$?
 
 if [ ! -s "$LOG" ]; then
 	tail -20 "$WORK/qemu.out" >&2 || true
@@ -135,7 +148,7 @@ elif grep -q "BYTEGURU-SESSION-FAIL" "$NORMAL"; then
 	grep "BYTEGURU-SESSION-FAIL" "$NORMAL" | sed 's/^/[boot-test]   /'
 	fail=1
 else
-	log "НЕТ: само-проверка не вышла на консоль за ${TIMEOUT_SECONDS} с"
+	log "НЕТ: само-проверка не вышла на консоль за ${ELAPSED} с ожидания"
 	fail=1
 fi
 
