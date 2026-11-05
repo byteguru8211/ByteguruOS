@@ -6,6 +6,6 @@ Name[en]=Settings
 Exec=bgsettings
 Icon=preferences-system
 Terminal=false
-Categories=Settings;System;
+Categories=Settings;
 StartupWMClass=bgsettings
 Keywords=настройки;клавиатура;тема;windows;загрузка;

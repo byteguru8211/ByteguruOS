@@ -343,3 +343,21 @@ jobs:
             fi
           done <<<"${files}"
           exit "${rc}"
+
+      - name: Проверка .desktop-файлов
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends desktop-file-utils
+          rc=0
+          # Файлы сеанса (wayland-sessions) намеренно не проверяются: они
+          # читаются greeter'ом, а не меню, и ключ DesktopNames валидатор
+          # считает ошибкой, хотя без него сеанс не определится.
+          for f in data/desktop/*.desktop; do
+            if ! out="$(desktop-file-validate "${f}" 2>&1)"; then
+              echo "desktop-file-validate: ${f}" >&2
+              echo "${out}" >&2
+              rc=1
+            fi
+          done
+          exit "${rc}"

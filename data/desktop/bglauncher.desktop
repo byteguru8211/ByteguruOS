@@ -7,6 +7,6 @@ GenericName=Лаунчер приложений
 Exec=bglauncher
 Icon=system-search
 Terminal=false
-Categories=Unity;GTK;Security;
+Categories=Utility;GTK;
 StartupWMClass=bglauncher
 Keywords=приложения;программы;поиск;windows;

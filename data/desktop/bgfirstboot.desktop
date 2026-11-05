@@ -7,6 +7,6 @@ Exec=bgfirstboot
 Icon=system-run
 Terminal=false
 NoDisplay=true
-Categories=Settings;System;
+Categories=Settings;
 StartupWMClass=bgfirstboot
 Comment=Мастер первоначальной настройки: регион, клавиатура, соседство с Windows

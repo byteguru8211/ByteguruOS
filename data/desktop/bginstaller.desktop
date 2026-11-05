@@ -10,6 +10,6 @@ Comment[ru]=Установка на диск, соседство с Windows и �
 Exec=bginstaller-gui
 Icon=drive-harddisk
 Terminal=false
-Categories=System;Settings;
+Categories=System;
 StartupWMClass=bginstaller
 Keywords=установка;диск;windows;загрузчик;
