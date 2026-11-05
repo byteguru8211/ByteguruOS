@@ -125,13 +125,27 @@ sudo apt-get install -y live-build debootstrap xorriso squashfs-tools \
 bash build/scripts/build-packages.sh          # .deb в build/live/config/packages.chroot/
 sudo bash build/scripts/build-iso.sh          # образ в build/out/
 sudo bash build/scripts/boot-smoke-test.sh    # прогон в QEMU: дошёл ли сеанс
+sudo bash build/scripts/install-smoke-test.sh # установка на диск + загрузка с него
 ```
 
 Порядок сборки важен: `build-iso.sh` берёт `.deb` из `packages.chroot/` и не
 пересобирает их, поэтому после правки в `src/` нужен `build-packages.sh`.
-В CI то же самое делают job'ы `iso-amd64` и `boot-smoke-test`; на Windows
-образ собрать нельзя — нет live-build, grub-mkimage и loop-устройств.
-Проверка руками в VirtualBox описана в [docs/VIRTUALBOX.md](docs/VIRTUALBOX.md).
+В CI то же самое делают job'ы `iso-amd64`, `boot-smoke-test` и `lint-shell`;
+на Windows образ собрать нельзя — нет live-build, grub-mkimage и loop-устройств.
+
+## Документация
+
+| Для кого | Где |
+|---|---|
+| сел за систему впервые | [docs/USER.md](docs/USER.md) — потоки, Guru Line, клавиши, установка |
+| обслуживает машину или парк | [docs/ADMIN.md](docs/ADMIN.md) — конфигурация, диагностика, сборка образа |
+| хочет понять, как устроено | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) и [docs/rfcs/](docs/rfcs/) |
+| проверяет в VirtualBox | [docs/VIRTUALBOX.md](docs/VIRTUALBOX.md) |
+| работает с командной строкой | `man bgwl`, `man bgctl`, `man bgline`, `man bginstaller`, `man bgd`, `man wcmgr` — страницы установлены в образ |
+
+Справочные страницы — не копия документации, а её часть: они попадают в
+`.deb` и доступны прямо в live-сессии, где браузера с wiki нет. Расхождение
+страницы с кодом считается дефектом страницы.
 
 ## Лицензия
 
