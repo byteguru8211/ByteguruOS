@@ -455,13 +455,37 @@ static void apply_config_line(struct bgwl_config *cfg, char *line) {
 	}
 }
 
+/* Where the configuration lives. Three sources, in this order of priority:
+ * BGWL_CONFIG (what bgwl-session already computes and exports — reading it
+ * here is what makes that line in the session script true), XDG_CONFIG_HOME,
+ * then $HOME/.config. Hardcoding $HOME/.config would silently ignore a user
+ * who moved their config home, and the compositor would start with factory
+ * settings while bgsettings edited a file nobody reads. */
+static const char *config_path(char *buffer, size_t size) {
+	const char *explicit_path = getenv("BGWL_CONFIG");
+	if (explicit_path != NULL && explicit_path[0] != '\0') {
+		snprintf(buffer, size, "%s", explicit_path);
+		return buffer;
+	}
+
+	const char *base = getenv("XDG_CONFIG_HOME");
+	if (base == NULL || base[0] == '\0') {
+		base = getenv("HOME");
+		if (base == NULL) {
+			return NULL;
+		}
+		snprintf(buffer, size, "%s/.config/byteguru/bgwl.conf", base);
+		return buffer;
+	}
+	snprintf(buffer, size, "%s/byteguru/bgwl.conf", base);
+	return buffer;
+}
+
 static void load_config_file(struct bgwl_config *cfg) {
-	const char *home = getenv("HOME");
-	if (home == NULL) {
+	char path[PATH_MAX];
+	if (config_path(path, sizeof(path)) == NULL) {
 		return;
 	}
-	char path[PATH_MAX];
-	snprintf(path, sizeof(path), "%s/.config/byteguru/bgwl.conf", home);
 
 	FILE *file = fopen(path, "r");
 	if (file == NULL) {

@@ -52,12 +52,21 @@ headless нужен для прогонов без монитора: CI, сни�
 .B \-h, \-\-help
 Краткая справка.
 .SH КОНФИГУРАЦИЯ
-Файл
-.IR ~/.config/byteguru/bgwl.conf ,
-формат «ключ = значение», комментарии с
+Файл формата «ключ = значение», комментарии с
 .IR # .
-Порядок применения: заводские значения, затем файл, затем переменные
+Место поиска, в порядке приоритета:
+.BR BGWL_CONFIG ,
+затем
+.IR $XDG_CONFIG_HOME/byteguru/bgwl.conf ,
+затем
+.IR ~/.config/byteguru/bgwl.conf .
+Порядок применения значений: заводские, затем файл, затем переменные
 окружения, затем опции командной строки. Поздний источник побеждает.
+
+Файл отсутствует — не ошибка: заводские значения образуют полную
+конфигурацию. Неизвестный ключ или модификатор — сообщение в журнале и пропуск
+строки, а не отказ запуска: сломанная строка не должна лишать пользователя
+стола.
 
 .TP
 .B layout
@@ -110,12 +119,32 @@ headless нужен для прогонов без монитора: CI, сни�
 .BR cursor-theme ", " cursor-size ", " output-scale ", " server-side-decoration
 Курсор, масштаб вывода и флаг собственных заголовков окон.
 .TP
-.BI "rule = " "матч:свойство=значение"
-Правило для окна: поток, раскладка, «плавающее», «прикреплённое».
+.BI "rule = " app_id ":" свойство ":" свойство
+Правило для окна по его \fIapp_id\fR. Свойства: \fIworkspace=N\fR,
+\fIlayout=tile|even|float\fR, \fIfullscreen\fR, \fIsticky\fR. Пример:
+.IR "rule = foot:workspace=2:layout=tile" .
+Непонятное свойство — сообщение в журнале и пропуск правила, а не молчаливый
+отказ всей конфигурации.
+.TP
+.BI "command-" комбинация " = " КОМАНДА
+Клавиша с произвольной командой, без синтаксиса действий:
+.IR "command-Super+F1 = foot" .
 .TP
 .BI "bind = " "комбинация:действие"
-Своя комбинация клавиш. Действие — имя из таблицы ниже или произвольная
-команда.
+Своя комбинация клавиш. Модификаторы: \fISuper\fR (он же \fIMod4\fR),
+\fICtrl\fR (\fIControl\fR), \fIAlt\fR, \fIShift\fR; имена клавиш берутся
+из таблицы xkb и \fIрегистрозависимы\fR (\fIT\fR, не \fIt\fR), а клавиши,
+которых в таблице нет, задаются числом evdev-кода. Действие — имя из
+таблицы ниже (\fIterminal\fR,
+\fIlauncher\fR, \fIfile-manager\fR, \fIscreenshot\fR, \fIlock\fR,
+\fIclose\fR, \fImaximize\fR, \fIfullscreen\fR, \fIpin\fR,
+\fIlayout-next\fR, \fIlayout-float\fR, \fIsplit-rotate\fR,
+\fIfocus-next\fR, \fIfocus-prev\fR, \fImove-next-slot\fR,
+\fImove-prev-slot\fR, \fIsend-next\fR, \fIsend-prev\fR,
+\fIsnap-left\fR, \fIsnap-right\fR, \fIsnap-top\fR, \fIsnap-bottom\fR,
+\fImaster-grow\fR, \fImaster-shrink\fR, \fImaster-more\fR,
+\fImaster-fewer\fR, \fIwindow-next-output\fR, \fIwindow-prev-output\fR,
+\fIpanel\fR, \fIexit\fR).
 .SH ПЕРЕМЕННЫЕ ОКРУЖЕНИЯ
 .TP
 .BGWL_TERMINAL\fR,\fP BGWL_LAUNCHER\fR,\fP BGWL_FILE_MANAGER\fR,\fP BGWL_SCREENSHOT\fR,\fP BGWL_LOCK\fR,\fP BGWL_LID
@@ -225,7 +254,8 @@ Super — клавиша «Meta» (обычно Win).
 .SH ФАЙЛЫ
 .TP
 .I ~/.config/byteguru/bgwl.conf
-пользовательская конфигурация
+пользовательская конфигурация (или каталог из \fIXDG_CONFIG_HOME\fR, либо
+путь из \fIBGWL_CONFIG\fR)
 .TP
 .I /etc/byteguru/bgwl.conf
 системная конфигурация (если создана)
