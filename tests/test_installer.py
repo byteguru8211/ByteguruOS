@@ -530,3 +530,22 @@ def test_cli_boot_repair_prints_commands(tmp_path, capsys):
     assert code == 0
     assert "efibootmgr -c" in out
     assert "отсутствует" in out
+
+
+def test_fat_labels_fit_eleven_characters():
+    """Метка FAT — 11 символов, и это не суеверие, а ограничение mkfs.fat.
+
+    Длиннее — mkfs.fat молча обрезает метку, а установщик дальше монтирует
+    том по LABEL=..., которого не существует: ESP находится не там, где его
+    оставили, и загрузчик ставится наугад.
+    """
+    disk = _disk(200, ())
+    install_plan = planner.plan(disk)
+    for action in install_plan.actions:
+        if action.kind != "create-partition":
+            continue
+        args = action.arguments
+        label = args[args.index("--label") + 1] if "--label" in args else ""
+        fs = args[args.index("--fs") + 1] if "--fs" in args else ""
+        if fs in ("fat32", "exfat"):
+            assert len(label) <= 11, f"метка {label!r} не влезет в FAT"

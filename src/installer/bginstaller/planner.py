@@ -402,8 +402,11 @@ def _ordered_actions(
             "esp",
             "--fs",
             "fat32",
+            # 11 символов — жёсткий предел метки FAT: mkfs.fat обрезает более
+            # длинные, и mount по LABEL=BYTEGURU_EFI (12) не находил том,
+            # который только что создал.
             "--label",
-            "BYTEGURU_EFI",
+            "BYTEGURU_OS",
         )
 
     labels = {name: (size, fs, label) for name, size, fs, label in _new_partitions(profile, layout)}

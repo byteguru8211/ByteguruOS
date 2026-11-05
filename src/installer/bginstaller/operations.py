@@ -135,7 +135,7 @@ def _esp_node(plan: InstallPlan, state: State) -> str:
     esp = plan.disk.esp
     if esp is not None:
         return partition_node(plan.disk, esp)
-    return state.node_for_label("BYTEGURU_EFI")
+    return state.node_for_label("BYTEGURU_OS")
 
 
 # --------------------------------------------------------------- действия
@@ -160,8 +160,9 @@ def _inspect_ntfs(action, plan, ctx, state) -> list[Job]:
     if windows is None:
         return [Job(note="раздела NTFS не найдено — проверка не нужна")]
     node = partition_node(plan.disk, windows)
-    # ntfsfix -n ничего не меняет, но отвечает на единственный важный вопрос:
-    # том размонтирован «чисто» или Windows оставила его в hibryd-состоянии.
+    # ntfsfix --dry-run ничего не меняет, но отвечает на единственный важный
+    # вопрос: том размонтирован «чисто» или Windows оставила его в гибридном
+    # состоянии (hiberfile + fast startup), когда менять разметку нельзя.
     return [Job(argv=("ntfsfix", "--dry-run", "--force", node),
                  note="читаем состояние тома, не изменяя его")]
 
@@ -445,7 +446,7 @@ def _esp_label(plan: InstallPlan) -> str:
     esp = plan.disk.esp
     if esp is not None and esp.label:
         return esp.label.upper()
-    return "BYTEGURU_EFI"
+    return "BYTEGURU_OS"
 
 
 def _adjtime(policy: str) -> str:
