@@ -159,6 +159,13 @@ def cmd_plan(args: argparse.Namespace) -> int:
             ignore_gates=args.allow_blocked,
         )
     )
+    if args.print_confirm_token:
+        # Машиночитаемый вывод для тех, кто подтверждает не руками. Токен
+        # зависит от состава плана (wipe-table — одно слово, изменение
+        # разметки — другое), и скрипт автоустановки обязан передать ровно
+        # тот, который требует план, а не угадывать его по догадкам.
+        print(confirm_token(install_plan))
+        return 0
     print(install_plan.summary())
     if install_plan.notes:
         print("\nзамечания:")
@@ -291,6 +298,8 @@ def build_parser() -> argparse.ArgumentParser:
     plan_cmd.add_argument("--removable", action="store_true")
     plan_cmd.add_argument("--battery", action="store_true")
     plan_cmd.add_argument("--allow-blocked", action="store_true", help="построить план несмотря на запреты")
+    plan_cmd.add_argument("--print-confirm-token", action="store_true",
+        help="напечатать только токен подтверждения этого плана")
     plan_cmd.set_defaults(func=cmd_plan)
 
     check = sub.add_parser("check", help="проверить готовность диска к установке")

@@ -57,11 +57,27 @@ def parse_lsblk(text: str) -> tuple[Disk, ...]:
     return tuple(disks)
 
 
+def _partition_table(value) -> PartitionTable:
+    """Таблица разделов по PTTYPE (lsblk) или label (sfdisk).
+
+    Пустое значение — диска без таблицы, то есть свежего. Раньше оно попадало
+    в ветку MBR, и проверка безопасности отказывала такому диску в UEFI:
+    «требуется GPT, а таблица mbr» — на диске, где нет ничего.
+    """
+    name = str(value or "").strip().lower()
+    if not name:
+        return PartitionTable.NONE
+    if name == "gpt":
+        return PartitionTable.GPT
+    if name in ("dos", "mbr", "msdos"):
+        return PartitionTable.MBR
+    return PartitionTable.UNKNOWN
+
+
 def _disk_from_lsblk(item: dict) -> Disk:
     children = item.get("children") or []
     partitions = tuple(_partition_from_lsblk(child, index + 1) for index, child in enumerate(children))
-    table_value = (item.get("pttype") or "").lower()
-    table = PartitionTable.GPT if table_value == "gpt" else PartitionTable.MBR
+    table = _partition_table(item.get("pttype"))
     size = _as_int(item.get("size"))
     if size <= 0:
         raise ProbeError(f"диск {item.get('name')!r} имеет нечитаемый размер")
@@ -109,7 +125,6 @@ def enrich_with_sfdisk(disk: Disk, text: str) -> Disk:
     except json.JSONDecodeError as exc:
         raise ProbeError(f"вывод sfdisk не является JSON: {exc}") from exc
     rows = payload.get("partitiontable") or {}
-    table_value = (rows.get("label") or "").lower()
     first_lba = _as_int(rows.get("firstlba")) or 0
     partitions: list[Partition] = []
     by_number: dict[int, tuple[int, int]] = {}
@@ -146,7 +161,11 @@ def enrich_with_sfdisk(disk: Disk, text: str) -> Disk:
                 flags=base.flags,
             )
         )
-    table = PartitionTable.GPT if table_value == "gpt" else disk.table
+    # sfdisk знает label лучше, но «не gpt» от него не переведёт GPT в
+    # неизвестность: если lsblk уже видел GPT, спорить с ним не будем.
+    table = _partition_table(rows.get("label"))
+    if table is PartitionTable.NONE:
+        table = disk.table
     return Disk(
         device=disk.device,
         size_bytes=disk.size_bytes,

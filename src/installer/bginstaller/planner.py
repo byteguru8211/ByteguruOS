@@ -414,6 +414,20 @@ def _ordered_actions(
         )
 
     add("probe-disk", disk.device, "--json")
+    if not clean_layout and disk.table is PartitionTable.NONE:
+        # parted не делает разделов на диске без метки: «mkpart» на свежем
+        # носителе отвечает «the disk doesn't contain a valid partition
+        # table». Пустой GPT-диск при этом полностью пригоден — поэтому
+        # условие смотрит на таблицу, а не на число разделов, и не превращает
+        # обычную установку в destructive.
+        # Путь полного стирания добавляет wipe-table сам — здесь он не нужен.
+        add(
+            "wipe-table",
+            disk.device,
+            destructive=True,
+            confirm=True,
+            rollback="восстановление только из резервной копии таблицы разделов",
+        )
     if windows.present and not clean_layout:
         add("inspect-ntfs", disk.device, "--check-only")
 

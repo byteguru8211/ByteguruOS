@@ -103,7 +103,19 @@ def evaluate(
     """Полный список замечаний. Порядок важен: блокирующие идут первыми."""
     gates: list[Gate] = []
 
-    if boot_mode is BootMode.UEFI and disk.table is not PartitionTable.GPT:
+    # Диск без таблицы — не препятствие, а чистый лист: план создаст GPT сам.
+    # Блокировать его мы учились ровно на свежем виртуальном диске, где
+    # отсутствие PTTYPE ошибочно читалось как «mbr».
+    if boot_mode is BootMode.UEFI and disk.table is PartitionTable.NONE:
+        gates.append(
+            Gate(
+                "uefi-creates-gpt",
+                Severity.INFO,
+                f"на {disk.device} таблицы разделов нет — установщик создаст GPT",
+                "ничего делать не нужно",
+            )
+        )
+    elif boot_mode is BootMode.UEFI and disk.table is not PartitionTable.GPT:
         gates.append(
             Gate(
                 "uefi-needs-gpt",

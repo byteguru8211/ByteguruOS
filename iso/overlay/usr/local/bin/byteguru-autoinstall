@@ -133,8 +133,21 @@ PASSWORD_FILE="$(mktemp)"
 printf '%s\n' "$CFG_PASSWORD" > "$PASSWORD_FILE"
 chmod 600 "$PASSWORD_FILE"
 
+# Токен подтверждает конкретный план: затирка таблицы — одно слово, изменение
+# разметки — другое. Угадывать его по составу действий здесь нечем, поэтому
+# спрашиваем у самого планировщика. Пустой ответ — не «ок, пропустим»:
+# без токена необратимые шаги были бы молча отменены в середине установки.
+CFG_TOKEN="$(bginstaller plan --disk-file /tmp/byteguru-lsblk.json \
+	--device "$CFG_TARGET" --boot uefi --profile "$CFG_PROFILE" \
+	--print-confirm-token 2>/dev/null | tail -1)"
+if [ -z "$CFG_TOKEN" ]; then
+	say "BYTEGURU-INSTALL-FAIL: планировщик не назвал токен подтверждения"
+	rm -f "$PASSWORD_FILE"
+	exit 1
+fi
+
 bginstaller apply --disk-file /tmp/byteguru-lsblk.json --device "$CFG_TARGET" \
-	--boot uefi --profile "$CFG_PROFILE" --apply --confirm-token ok \
+	--boot uefi --profile "$CFG_PROFILE" --apply --confirm-token "$CFG_TOKEN" \
 	--user "$CFG_USER" --password-file "$PASSWORD_FILE" \
 	--hostname "$CFG_HOSTNAME" --timezone Europe/Moscow --keyboard ru \
 	> /tmp/byteguru-apply.txt 2>&1

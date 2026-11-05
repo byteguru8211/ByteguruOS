@@ -827,3 +827,60 @@ def test_efi_bootloader_also_writes_the_removable_path():
     flat = [" ".join(job.argv) for job in jobs if job.argv]
     assert any("grub-install" in line and "--force-extra-removable" in line
         for line in flat)
+
+
+def test_blank_disk_is_not_mbr():
+    """Диск без PTTYPE — чистый лист, а не «mbr».
+
+    Свежий виртуальный диск (как и любой купленный) не имеет таблицы разделов
+    вообще. Сведение пустого значения к MBR отказывало UEFI-установке со
+    словами «загрузка UEFI требует GPT, а таблица mbr» там, где стирать
+    нечего, и это был первый же прогон установки на диск по-настоящему.
+    """
+    disk = probe._disk_from_lsblk({"name": "vda", "size": str(40 * GiB), "children": []})
+    assert disk.table is PartitionTable.NONE
+    install_plan = planner.plan(disk, profile=Profile.KIOSK, boot_mode=BootMode.UEFI)
+    kinds = [action.kind for action in install_plan.actions]
+    assert "wipe-table" in kinds
+    assert kinds.index("wipe-table") < kinds.index("create-partition")
+
+
+def test_labeled_but_empty_disk_needs_no_wipe():
+    """Пустой GPT-диск не destructive: разметка на нём и так возможна."""
+    install_plan = planner.plan(_disk(40, (), table=PartitionTable.GPT),
+        profile=Profile.KIOSK, boot_mode=BootMode.UEFI)
+    assert "wipe-table" not in [a.kind for a in install_plan.actions]
+    assert install_plan.requires_user_confirmation() is False
+
+
+def test_unknown_partition_table_still_blocks_uefi():
+    """Незнакомая таблица — риск, а не разрешение: перемаркировать её значит
+    уничтожить данные, которых установщик не видел."""
+    with pytest.raises(PlanError, match="таблица unknown"):
+        planner.plan(_disk(200, (), table=PartitionTable.UNKNOWN),
+            boot_mode=BootMode.UEFI)
+
+
+def test_dos_aliases_are_mbr():
+    for label in ("dos", "msdos", "mbr"):
+        assert probe._partition_table(label) is PartitionTable.MBR
+
+
+def test_plan_prints_the_token_it_will_demand(tmp_path, capsys):
+    """Скрипт автоустановки не угадывает токен — его называет сам план.
+
+    Токен зависит от состава действий, и зашитое в скрипт «ok» перестало
+    подходить ровно тогда, когда пустой диск начал требовать mklabel:
+    подтверждение не совпало бы, необратимые шаги были бы отменены, а
+    установка всё равно выглядела бы «прошедшей».
+    """
+    lsblk = tmp_path / "lsblk.json"
+    lsblk.write_text(
+        json.dumps({"blockdevices": [
+            {"name": "vda", "type": "disk", "size": str(60 * GiB), "children": []}]}),
+        encoding="utf-8")
+    code = cli.main(["plan", "--disk-file", str(lsblk), "--device", "/dev/vda",
+        "--profile", "kiosk", "--print-confirm-token"])
+    token = capsys.readouterr().out.strip()
+    assert code == 0
+    assert token == "udalit-dannye"
