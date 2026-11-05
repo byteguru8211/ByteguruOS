@@ -38,6 +38,7 @@
 
 #include <wayland-server-core.h>
 #include <wayland-util.h>
+#include <wlr/backend/headless.h>
 #include <wlr/types/wlr_scene.h>
 #include <wlr/types/wlr_xdg_shell.h>
 #include <wlr/util/log.h>
@@ -279,6 +280,12 @@ static void json_state(struct bgwl_json *json, struct bgwl_server *server) {
 		json_addf(json, ",\"description\":");
 		json_add_string(json, output->wlr_output->description != NULL
 			? output->wlr_output->description : "");
+		/* Whether this output reaches a physical screen. A compositor on the
+		 * headless fallback answers on the socket like a working one, so
+		 * without this flag "session is up" cannot be told apart from
+		 * "session is up but there is nowhere to draw". */
+		json_addf(json, ",\"headless\":%s",
+			wlr_output_is_headless(output->wlr_output) ? "true" : "false");
 		struct wlr_box box;
 		wlr_output_layout_get_box(server->output_layout, output->wlr_output,
 			&box);

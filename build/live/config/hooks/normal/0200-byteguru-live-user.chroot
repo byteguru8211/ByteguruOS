@@ -5,7 +5,7 @@
 # сеансе ByteguruOS (bgwl + панель), где можно всё попробовать, включая sudo без
 # пароля — это live-демо, а не боевая система.
 #
-# Почему getty + .bash_profile, а не greetd/lightdm:
+# Почему getty + /etc/profile.d, а не greetd/lightdm:
 #   * greeter — это про «ввести пароль при входе». В live-образе пароля нет, и
 #     просить его не у чего;
 #   * механизм тривиально читается в логе загрузки и не зависит от того, какой
@@ -60,19 +60,18 @@ ExecStart=-/sbin/agetty --autologin ${LIVE_USER} --noclear %I \$TERM
 EOF
 
 HOME_DIR="$(getent passwd "$LIVE_USER" | cut -d: -f6)"
-cat > "$HOME_DIR/.bash_profile" <<'EOF'
-# Live-сеанс ByteguruOS: на tty1 сразу поднимаем стол.
-#
-# Проверка tty обязательна: без неё любой `ssh byteguru@host` или `su -`
-# попытался бы запустить композитор из не-консольного шелла, и пользователь
-# получил бы вместо оболочки непонятную ошибку про DRM.
-if [ "$(id -u)" != "0" ] && [ "$(tty)" = "/dev/tty1" ] && \
-   command -v bgwl-session >/dev/null 2>&1; then
-	exec bgwl-session
-fi
-EOF
-chown "${LIVE_USER}:${LIVE_USER}" "$HOME_DIR/.bash_profile" "$HOME_DIR/.bashrc" 2>/dev/null || true
-chmod 0644 "$HOME_DIR/.bash_profile"
+
+# Стол на tty1 поднимает /etc/profile.d/90-byteguru-session.sh, а не личный
+# .bash_profile: /etc/profile читается до любого личного файла и не зависит от
+# имени вошедшего. Личный файл пришлось бы создавать дважды — здесь для
+# live-демо и в установщике для имени, которое ввёл человек, и именно на этом
+# расхождении установленная система загружается в пустую оболочку.
+chown "${LIVE_USER}:${LIVE_USER}" "$HOME_DIR/.bashrc" 2>/dev/null || true
+
+# Имя демо-учётки — то, по чему установщик удалит её из установленной системы
+# вместе с sudo без пароля (см. _strip_live_demo в bginstaller/operations.py).
+mkdir -p /etc/byteguru
+printf '%s\n' "$LIVE_USER" > /etc/byteguru/live-user
 
 # --- настройки оболочки по умолчанию -------------------------------------------
 # Именно этот файл читает bgwl при старте; он же — то, что потом правит

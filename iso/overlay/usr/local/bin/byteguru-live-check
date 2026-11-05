@@ -1,33 +1,60 @@
 #!/bin/sh
-# Само-проверка live-сеанса: композитор поднялся, оболочка его видит.
+# Само-проверка сеанса ByteguruOS: композитор поднялся, оболочка его видит,
+# и композитор увидел экран.
 #
 # Зачем отдельный скрипт: «образ загрузился» и «образ дал рабочий сеанс» —
 # разные вещи. Без этой проверки CI видит только чёрный экран, а причина
-# (нет сокета, нет Wayland-дисплея, сессия упала на старте) разбирается
+# (нет сокета, нет Wayland-дисплея, сеанс упал на старте) разбирается
 # гаданием по скриншотам.
+#
+# Проверка идёт и в live-образе, и на установленной системе: признак того,
+# что стол здесь вообще ждут, — автологин на tty1. Пользователя и его uid
+# берём оттуда же, а не из догадки: в live это одно имя, в установленной
+# системе — то, которое человек ввёл в установщике, и uid у него может быть
+# любой.
 #
 # Вывод идёт в /dev/console (см. StandardOutput=journal+console у сервиса),
 # поэтому строки BYTEGURU-SESSION-OK / -FAIL попадают и в serial-лог QEMU,
-# и в журнал, и в консоль live-сессии.
+# и в журнал, и в консоль сессии.
 
 set -u
 
-# Проверка имеет смысл только в live-сессии: на установленной системе такого
-# монтирования нет, и сервис должен молча пройти мимо, а не ругаться при
-# каждой загрузке.
-if [ ! -d /run/live/medium ]; then
-	exit 0
-fi
-
-USER_NAME="${BG_LIVE_USER:-byteguru}"
-RUNTIME="${BG_LIVE_RUNTIME:-/run/user/1000}"
-SOCKET="$RUNTIME/byteguru/compositor.sock"
-TRIES="${BG_LIVE_CHECK_TRIES:-90}"
-
+# Строки проверки живут и в журнале, и на консоли: в headless-прогоне
+# журнала некому смотреть.
 say() {
 	printf '%s\n' "$1"
 	printf '%s\n' "$1" > /dev/console 2>/dev/null || true
 }
+
+# Имя пользователя автологина из drop-in'а getty; пусто — если его нет.
+autologin_user() {
+	for conf in /etc/systemd/system/getty@tty1.service.d/*.conf; do
+		[ -r "$conf" ] || continue
+		name=$(sed -n 's/.*--autologin \([^ ]*\).*/\1/p' "$conf" | head -n 1)
+		if [ -n "$name" ]; then
+			printf '%s\n' "$name"
+			return 0
+		fi
+	done
+	return 1
+}
+
+USER_NAME="${BG_LIVE_USER:-$(autologin_user)}"
+if [ -z "$USER_NAME" ]; then
+	# Ни автологина, ни явно заданного имени: стола тут не ждут — молча мимо.
+	exit 0
+fi
+
+USER_ID=$(id -u "$USER_NAME" 2>/dev/null || printf '')
+if [ -z "$USER_ID" ]; then
+	say "BYTEGURU-SESSION-FAIL: пользователя автологина нет в системе: $USER_NAME"
+	exit 1
+fi
+
+RUNTIME="${BG_LIVE_RUNTIME:-/run/user/$USER_ID}"
+SOCKET="$RUNTIME/byteguru/compositor.sock"
+HOME_DIR=$(getent passwd "$USER_NAME" 2>/dev/null | cut -d: -f6)
+TRIES="${BG_LIVE_CHECK_TRIES:-90}"
 
 i=0
 while [ "$i" -lt "$TRIES" ]; do
@@ -40,7 +67,7 @@ if [ ! -S "$SOCKET" ]; then
 	say "BYTEGURU-SESSION-FAIL: сокета композитора нет через ${TRIES} с: $SOCKET"
 	# Причина почти всегда в последних строках журнала сеанса: без них
 	# «сеанс не поднялся» приходится разбирать гаданием.
-	for log in "/home/${USER_NAME}/.local/state/byteguru/session.log" \
+	for log in "${HOME_DIR:-/home/$USER_NAME}/.local/state/byteguru/session.log" \
 		"$RUNTIME/byteguru/session.log"; do
 		if [ -f "$log" ]; then
 			say "BYTEGURU-SESSION-FAIL: последние строки $log:"
@@ -50,7 +77,7 @@ if [ ! -S "$SOCKET" ]; then
 	exit 1
 fi
 
-# Проверку делает live-пользователь: сокет принадлежит ему, и «root видит
+# Проверку делает пользователь сеанса: сокет принадлежит ему, и «root видит
 # сокет» не означает, что оболочка может к нему подключиться.
 status=$(su - "$USER_NAME" -c "XDG_RUNTIME_DIR=$RUNTIME bgctl --json status" 2>&1)
 code=$?
@@ -61,7 +88,19 @@ if [ $code -ne 0 ] || ! printf '%s' "$status" | grep -q '"compositor": *"bgwl"';
 	exit 1
 fi
 
-streams=$(printf '%s' "$status" | grep -c '"name"')
+streams=$(printf '%s' "$status" | grep -c '"index":')
 windows=$(printf '%s' "$status" | grep -c '"app_id"')
-say "BYTEGURU-SESSION-OK: композитор отвечает, потоков: $streams, окон: $windows"
+screens=$(printf '%s' "$status" | grep -c '"headless": *false')
+
+# Экран — отдельная проверка, а не часть «композитор отвечает». Без KMS
+# композитор живёт на запасном headless-выводе: сокет есть, всё отвечает, а
+# человек видит текстовую консоль и называет это зависанием. Для рабочего стола
+# «нарисовать некуда» — это отказ, а не успех.
+if [ "$screens" -eq 0 ]; then
+	say "BYTEGURU-SESSION-FAIL: композитор отвечает, но ни одного экрана у него нет"
+	say "BYTEGURU-SESSION-FAIL: вывод только headless — в ВМ нужен VMSVGA, на машине /dev/dri/card0"
+	exit 1
+fi
+
+say "BYTEGURU-SESSION-OK: сеанс $USER_NAME: экранов: $screens, потоков: $streams, окон: $windows"
 exit 0

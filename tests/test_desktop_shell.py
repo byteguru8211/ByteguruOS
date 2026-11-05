@@ -10,6 +10,7 @@ import json
 import re
 import os
 import socket
+import subprocess
 import sys
 import threading
 from pathlib import Path
@@ -509,3 +510,47 @@ def test_commands_in_documented_examples_exist():
                 if first not in ours | external:
                     unknown.add(f"{doc.relative_to(root)}: {first}")
     assert not unknown, sorted(unknown)
+
+
+def test_session_says_out_loud_when_there_is_no_screen(tmp_path):
+    """Сеанс без экрана выглядит для человека как зависшая загрузка.
+
+    Композитор без KMS уходит на headless-вывод: сокет есть, всё отвечает, а
+    на мониторе остаётся текстовая консоль. Молчать в этом случае — значит
+    отправить человека разбирать «зависание» вместо одной строчки на экране.
+    """
+    stubs = tmp_path / "stubs"
+    stubs.mkdir()
+    runtime = tmp_path / "run"
+    runtime.mkdir()
+    # Настоящий unix-сокет: скрипт проверяет именно тип файла, а не наличие.
+    listener = socket.socket(socket.AF_UNIX)
+    listener.bind(str(runtime / "wayland-0"))
+    listener.listen(1)
+
+    (stubs / "bgwl").write_text("#!/bin/sh\nsleep 5\n", encoding="utf-8")
+    # Один и тот же bgctl отвечает и на status, и на что угодно ещё — только
+    # headless-выводом.
+    (stubs / "bgctl").write_text(
+        "#!/bin/sh\n"
+        "printf '%s\\n' '{\"compositor\":\"bgwl\",\"outputs\":"
+        '[{"name":"HEADLESS-1","headless":true}]}"\n',
+        encoding="utf-8")
+    for stub in stubs.iterdir():
+        stub.chmod(0o755)
+
+    script = Path(__file__).resolve().parents[1] / "bin" / "bgwl-session"
+    env = dict(os.environ,
+        PATH=f"{stubs}:/usr/bin:/bin",
+        XDG_RUNTIME_DIR=str(runtime),
+        HOME=str(tmp_path),
+        XDG_STATE_HOME=str(tmp_path / "state"),
+        WAYLAND_DISPLAY="wayland-0",
+        BGWL_SESSION_SCREEN_TRIES="1")
+    try:
+        proc = subprocess.run(["/bin/sh", str(script)], env=env,
+            capture_output=True, text=True, timeout=60,
+            stdin=subprocess.DEVNULL)
+    finally:
+        listener.close()
+    assert "ни одного экрана" in proc.stderr

@@ -22,7 +22,7 @@ set -u
 user_id=$(id -u)
 
 # XDG_RUNTIME_DIR обязателен: в нём сокет Wayland, сокет управления композитора
-# и сокет bgd. Без него сеанс technically работает, но панель ничего не видит.
+# и сокет bgd. Без него сеанс тоже работает, но панель ничего не видит.
 if [ -z "${XDG_RUNTIME_DIR:-}" ]; then
 	XDG_RUNTIME_DIR="/run/user/$user_id"
 	if ! mkdir -p -m 0700 "$XDG_RUNTIME_DIR" 2>/dev/null; then
@@ -50,8 +50,9 @@ export _JAVA_AWT_WM_NONREPARENTING=1
 export ADW_DISABLE_PORTAL=0
 
 # Тема композитора читает этот файл; если его нет, bgwl живёт заводскими
-# значениями, и это нормальный первый запуск.
-BGWL_CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/byteguru/bgwl.conf"
+# значениями, и это нормальный первый запуск. Без export переменная осталась бы
+# локальной для этого шелла, и композитор прочитал бы путь сам.
+export BGWL_CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/byteguru/bgwl.conf"
 
 # Демоны сеанса. Ошибку запуска не считаем ошибкой сеанса: панель умеет
 # работать без bgd (читает .desktop напрямую).
@@ -83,12 +84,58 @@ while [ "$i" -lt 50 ]; do
 	[ -S "$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY" ] && break
 	kill -0 "$BGWL_PID" 2>/dev/null || {
 		echo "bgwl-session: композитор завершился, не создав сокет" >&2
+		# Причина в журнале сеанса: без этих строк «экран не поднялся»
+		# разбирается гаданием, потому что tty после выхода перезапускается.
+		tail -n 8 "$SESSION_LOG" 2>/dev/null | while read -r line; do
+			echo "  $line" >&2
+		done
 		wait "$BGWL_PID"
 		exit 1
 	}
 	i=$((i + 1))
 	sleep 0.1
 done
+
+if [ ! -S "$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY" ]; then
+	echo "bgwl-session: сокета нет через 5 с, процесс композитора жив: $XDG_RUNTIME_DIR/$WAYLAND_DISPLAY" >&2
+	tail -n 8 "$SESSION_LOG" 2>/dev/null | while read -r line; do
+		echo "  $line" >&2
+	done
+fi
+
+# Экран. Без KMS-устройства композитор уходит на запасной headless-вывод: сокет
+# есть, всё отвечает, а на мониторе остаётся текстовая консоль — человек видит
+# это как «загрузка зависла». Различить можно только по ответу самого
+# композитора, поэтому спрашиваем его, а не гадаем по /dev/dri.
+if command -v bgctl >/dev/null 2>&1; then
+	screen_seen=0
+	i=0
+	# Сколько ждать экран — считанные секунды на нормальном железе: вывод
+	# появляется вместе с DRM-бэкендом. Переменная нужна медленным машинам и
+	# проверке этого скрипта в тестах.
+	tries="${BGWL_SESSION_SCREEN_TRIES:-30}"
+	while [ "$i" -lt "$tries" ]; do
+		if bgctl --json status 2>/dev/null | grep -q '"headless": *false'; then
+			screen_seen=1
+			break
+		fi
+		kill -0 "$BGWL_PID" 2>/dev/null || break
+		i=$((i + 1))
+		sleep 1
+	done
+	# Предупреждение имеет смысл, пока композитор жив: мёртвый процесс
+	# объяснит себя ниже, где сеанс ждёт его код возврата.
+	if [ "$screen_seen" -eq 0 ] && kill -0 "$BGWL_PID" 2>/dev/null; then
+		{
+			echo "bgwl-session: композитор работает, но ни одного экрана не увидел."
+			echo "bgwl-session: на мониторе останется текстовая консоль — это не зависание:"
+			echo "bgwl-session: сеанс живёт на запасном headless-выводе."
+			echo "bgwl-session: в виртуальной машине нужен видеоадаптер VMSVGA (не VBoxSVGA/VGA),"
+			echo "bgwl-session: на машине — /dev/dri/card0, то есть драйвер GPU в ядре."
+		} >&2
+		echo "bgwl-session: экранов нет, вывод только headless" >> "$SESSION_LOG" 2>/dev/null || true
+	fi
+fi
 
 # Оболочка. Каждое окно — отдельный процесс: падение панели не должно
 # утаскивать за собой сеанс.
