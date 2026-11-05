@@ -53,14 +53,18 @@ cp "$VMLINUZ" "$WORK/vmlinuz"
 cp "$INITRD" "$WORK/initrd.img"
 umount "$MNT"
 
-# console=ttyS0 — единственное, что делает прогон читаемым; nomodeset убирает
-# попытку поднять DRM на виртуальном железе, где её нет.
-APPEND="boot=live components hostname=byteguru username=byteguru console=ttyS0,115200 nomodeset"
+# console=ttyS0 — единственное, что делает прогон читаемым.
+#
+# nomodeset сюда намеренно НЕ добавлен: он выключает DRM, а DRM — единственный
+# бэкенд, который bgwl умеет использовать на виртуальном железе. С nomodeset
+# прогон падал не из-за образа, а из-за собственных параметров (проверено
+# 2026-11-05: сеанс не поднимался, хотя образ грузился корректно).
+APPEND="boot=live components hostname=byteguru username=byteguru console=ttyS0,115200"
 
 log "запуск QEMU (до ${TIMEOUT_SECONDS} с), лог: $LOG"
 timeout --signal=SIGKILL "$TIMEOUT_SECONDS" qemu-system-x86_64 \
 	-machine accel=kvm:tcg -cpu max -smp 2 -m "$MEMORY_MB" \
-	-display none -no-reboot -no-shutdown \
+	-vga std -display none -no-reboot -no-shutdown \
 	-cdrom "$ISO" -boot d \
 	-kernel "$WORK/vmlinuz" -initrd "$WORK/initrd.img" \
 	-append "$APPEND" \

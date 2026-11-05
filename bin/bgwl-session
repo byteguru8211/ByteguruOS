@@ -65,7 +65,15 @@ if ! command -v bgwl >/dev/null 2>&1; then
 	exit 127
 fi
 
-bgwl &
+# Журнал сеанса. Без него падение композора нечем объяснить: вывод уходит в
+# tty, который при автологине никто не листал, а после выхода из сеанса tty
+# перезапускается. Файл в $XDG_STATE_HOME читается и живой сессией
+# (F2 в консоли), и само-проверкой образа.
+SESSION_LOG="${XDG_STATE_HOME:-$HOME/.local/state}/byteguru/session.log"
+mkdir -p "$(dirname "$SESSION_LOG")" 2>/dev/null || true
+echo "--- bgwl-session: $(date -Is) ---" >> "$SESSION_LOG" 2>/dev/null || true
+
+bgwl >> "$SESSION_LOG" 2>&1 &
 BGWL_PID=$!
 
 # Ожидание сокета: 50 шагов по 100 мс. Появление файла — тот же признак, что
@@ -87,7 +95,7 @@ done
 shell_pids=""
 for component in bgpanel bgnote; do
 	if command -v "$component" >/dev/null 2>&1; then
-		"$component" >/dev/null 2>&1 &
+		"$component" >> "$SESSION_LOG" 2>&1 &
 		shell_pids="$shell_pids $!"
 	fi
 done

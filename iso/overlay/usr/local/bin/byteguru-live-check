@@ -38,7 +38,15 @@ done
 
 if [ ! -S "$SOCKET" ]; then
 	say "BYTEGURU-SESSION-FAIL: сокета композитора нет через ${TRIES} с: $SOCKET"
-	say "BYTEGURU-SESSION-FAIL: сеанс не поднялся — смотреть journalctl -u bgwl-session"
+	# Причина почти всегда в последних строках журнала сеанса: без них
+	# «сеанс не поднялся» приходится разбирать гаданием.
+	for log in "/home/${USER_NAME}/.local/state/byteguru/session.log" \
+		"$RUNTIME/byteguru/session.log"; do
+		if [ -f "$log" ]; then
+			say "BYTEGURU-SESSION-FAIL: последние строки $log:"
+			tail -12 "$log" 2>/dev/null | while read -r line; do say "  $line"; done
+		fi
+	done
 	exit 1
 fi
 
