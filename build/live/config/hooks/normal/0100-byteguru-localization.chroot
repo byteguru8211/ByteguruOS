@@ -64,11 +64,17 @@ ln -sf /etc/systemd/system/byteguru-vboxsf.service \
 	/etc/systemd/system/multi-user.target.wants/byteguru-vboxsf.service
 ln -sf /etc/systemd/system/byteguru-live-check.service \
 	/etc/systemd/system/multi-user.target.wants/byteguru-live-check.service
+# Автоустановка включена как unit, но сама по себе не запускается: без флага
+# byteguru.autoinstall в командной строке ядра скрипт выходит молча. Так
+# тестовый путь есть в образе, а живой пользователь не теряет диск.
+ln -sf /etc/systemd/system/byteguru-autoinstall.service \
+	/etc/systemd/system/multi-user.target.wants/byteguru-autoinstall.service
 
 # --- права на sbin-хелперы ------------------------------------------------------
 chmod 0755 /usr/local/sbin/byteguru-boot-repair 2>/dev/null || true
 chmod 0755 /usr/local/sbin/byteguru-boot-status 2>/dev/null || true
 chmod 0755 /usr/local/bin/byteguru-vboxsf-mount 2>/dev/null || true
 chmod 0755 /usr/local/bin/byteguru-live-check 2>/dev/null || true
+chmod 0755 /usr/local/bin/byteguru-autoinstall 2>/dev/null || true
 
 exit 0

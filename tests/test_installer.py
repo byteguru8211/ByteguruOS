@@ -624,3 +624,43 @@ def test_unknown_device_is_listed_not_guessed(tmp_path):
     with pytest.raises(InstallerError, match="нет в описании") as caught:
         cli._load_description(description, "/dev/nvme0n1")
     assert "/dev/sda" in str(caught.value) and "/dev/sdb" in str(caught.value)
+
+
+def test_console_setting_survives_install(tmp_path, monkeypatch):
+    """Headless-машина должна остаться headless и после установки.
+
+    Ставят с console=ttyS0 — значит монитор к этой машине не подключён. Если
+    установщик этот параметр потеряет, система загрузится молча в VGA, а
+    администратор увидит «не грузится».
+    """
+    cmdline = tmp_path / "cmdline"
+    cmdline.write_text("BOOT_IMAGE=/live/vmlinuz console=ttyS0,115200 ro quiet\n",
+        encoding="utf-8")
+    real = operations._console_from_cmdline
+    monkeypatch.setattr(operations, "_console_from_cmdline",
+        lambda *args: real(str(cmdline)))
+
+    install_plan = planner.plan(_disk(60, ()))
+    written: dict[str, str] = {}
+    report = apply_plan(install_plan, apply=True, context=operations.Context(
+            target=str(tmp_path / "tgt")),
+        writer=lambda path, content: written.__setitem__(path, content),
+        runner=lambda argv, stdin=None: 0)
+    assert report.ok is True
+    drop_in = next((value for path, value in written.items()
+        if path.endswith("50-byteguru-console.cfg")), None)
+    assert drop_in is not None
+    assert "console=ttyS0,115200" in drop_in and "GRUB_TERMINAL" in drop_in
+
+
+def test_console_absent_on_normal_desktop(tmp_path, monkeypatch):
+    """Обычный стол не должен получать serial-консоль в grub: это меняет
+    поведение загрузчика там, где её никто не просил."""
+    monkeypatch.setattr(operations, "_console_from_cmdline", lambda *a: "")
+    install_plan = planner.plan(_disk(60, ()))
+    written: dict[str, str] = {}
+    apply_plan(install_plan, apply=True, context=operations.Context(
+        target=str(tmp_path / "tgt")),
+        writer=lambda path, content: written.__setitem__(path, content),
+        runner=lambda argv, stdin=None: 0)
+    assert not any(path.endswith("50-byteguru-console.cfg") for path in written)

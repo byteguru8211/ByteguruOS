@@ -22,7 +22,8 @@ grub-install, efibootmgr.
 from __future__ import annotations
 
 import shlex
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
+from pathlib import Path
 
 from bginstaller.errors import ApplyError
 from bginstaller.models import BootMode, Disk, InstallPlan, Partition
@@ -292,7 +293,30 @@ def _configure_boot(action, plan, ctx, state) -> list[Job]:
     jobs.append(Job(argv=_chroot(root, "ldconfig")))
     jobs.append(Job(argv=_chroot(root, "update-initramfs", "-u", "-k", "all"),
         note="initramfs собран под новую разметку"))
+    console = _console_from_cmdline()
+    if console:
+        # Кто ставит систему с последовательной консоли (headless-машина,
+        # сервер без монитора, прогон в QEMU), тот и смотреть её будет туда
+        # же. Без этого шага установленная система молчит в VGA, а «не
+        # грузится» и «грузится, но ничего не пишет» для такого администратора
+        # неразличимы.
+        jobs.append(Job(write=(f"{root}/etc/default/grub.d/50-byteguru-console.cfg",
+            f'GRUB_CMDLINE_LINUX="{console}"\n'
+            'GRUB_TERMINAL="serial console"\n'
+            'GRUB_SERIAL_COMMAND="serial --unit=0 --speed=115200"\n')))
     return jobs
+
+
+def _console_from_cmdline(path: str = "/proc/cmdline") -> str:
+    """Первое console= из командной строки живого ядра."""
+    try:
+        line = Path(path).read_text(encoding="utf-8")
+    except OSError:
+        return ""
+    for token in line.split():
+        if token.startswith("console="):
+            return token
+    return ""
 
 
 def _mount_api(root: str, api: str) -> Job:
