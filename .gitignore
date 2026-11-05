@@ -38,3 +38,18 @@ desktop.ini
 # Локальные рабочие каталоги сборки композитора
 build-c/
 build-wl/
+
+# Выход dpkg-buildpackage и debhelper: пересоздаются на каждой сборке пакетов.
+# Держать их в git — это две копии одного дерева и шум в diff, в котором
+# теряется настоящая правка (в частности debian/*.install).
+debian/tmp/
+debian/.debhelper/
+debian/byteguru-*/
+debian/*.substvars
+debian/*.deb
+debian/*.buildinfo
+debian/*.changes
+
+# Кэш индексов apt, которым check-package-names.py сверяет имена пакетов.
+# 13 МБ на клон — это не данные проекта, а скачанный из архива отчёт.
+.cache/
