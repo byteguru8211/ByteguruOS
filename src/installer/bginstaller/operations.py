@@ -42,6 +42,14 @@ IMAGE_EXCLUDES = (
 
 _BTRFS_MOUNT = "defaults,compress=zstd,ssd,discard=async"
 
+# Группы пользователя рабочего стола сверх основной. Порядок значим: он
+# попадает в argv, и dry-run обязан показывать ровно то, что исполнится.
+EXTRA_GROUPS = ("sudo", "input", "audio", "video", "plugdev", "netdev", "cdrom", "floppy")
+
+# Файл-маркер live-образа: его пишет хук 0200-byteguru-live-user, и по нему
+# установщик узнаёт демо-учётку, которая не должна пережить установку.
+LIVE_DEMO_MARKER = "/etc/byteguru/live-user"
+
 # Тип раздела для parted: esp — отдельное имя, всё остальное — Linux FS data.
 _PARTED_TYPE = {"esp": "esp", "linux": "linux"}
 
@@ -293,6 +301,7 @@ def _configure_boot(action, plan, ctx, state) -> list[Job]:
     ]
     if ctx.username:
         jobs.extend(_create_user(root, ctx))
+    jobs.extend(_strip_live_demo(root, ctx))
     jobs.append(Job(argv=_chroot(root, "systemd-firstboot", "--root", "/",
         "--locale", ctx.language, "--keymap", ctx.keyboard,
         "--timezone", ctx.timezone, "--hostname", ctx.hostname),
@@ -332,20 +341,103 @@ def _mount_api(root: str, api: str) -> Job:
 
 
 def _create_user(root: str, ctx: Context) -> list[Job]:
-    groups = "sudo,input,audio,video,fuse,plugdev"
-    jobs = [Job(argv=_chroot(root, "useradd", "--create-home", "--shell",
-        "/bin/bash", "--groups", groups, "--comment", ctx.real_name or ctx.username,
-        ctx.username))]
+    groups = _target_groups(root) & set(EXTRA_GROUPS)
+    # Порядок берём из EXTRA_GROUPS, а не из множества: без этого список групп
+    # менялся бы от запуска к запуску, и dry-run показал бы не то, что
+    # действительно исполнится.
+    ordered = [group for group in EXTRA_GROUPS if group in groups]
+    if _account_exists(root, ctx.username):
+        # Человек ввёл то же имя, что у live-пользователя (самый частый ввод —
+        # «byteguru»). Учётка с таким именем уже в /etc/passwd, пришедшем с
+        # образом, и useradd на ней падает с «already exists» посреди установки,
+        # когда диск уже размечен. Поэтому её перенастраиваем, а не создаём.
+        argv = ["chroot", root, "usermod", "--shell", "/bin/bash",
+            "--comment", ctx.real_name or ctx.username]
+        if ordered:
+            argv += ["--groups", ",".join(ordered)]
+        argv.append(ctx.username)
+        note = f"учётная запись {ctx.username} уже была — обновлена"
+    else:
+        argv = ["chroot", root, "useradd", "--create-home", "--shell", "/bin/bash"]
+        if ordered:
+            argv += ["--groups", ",".join(ordered)]
+        argv += ["--comment", ctx.real_name or ctx.username, ctx.username]
+        note = f"создана учётная запись {ctx.username}"
+    jobs = [Job(argv=tuple(argv), note=note)]
     # Пароль уходит в stdin утилиты chpasswd, а не в argv: в списке аргументов
     # он светился бы в /proc и в логе установки.
     jobs.append(Job(argv=_chroot(root, "chpasswd"),
         stdin=f"{ctx.username}:{ctx.password}\n"))
     if ctx.autologin:
+        # Имя файла то же, что у drop-in из live-хука: запись просто заменяет
+        # пришедший с образом автологин. Два файла в одном каталоге оставили бы
+        # два ExecStart, и победил бы тот, что systemd прочитал последним, —
+        # то есть вход зависел бы от алфавита, а не от установщика.
         jobs.append(Job(write=(f"{root}/etc/systemd/system/getty@tty1.service.d"
-            "/byteguru-autologin.conf",
+            "/50-byteguru-autologin.conf",
             "[Service]\n"
             f"ExecStart=\nExecStart=-/sbin/agetty --autologin {ctx.username} "
             "--noclear %I $TERM\n")))
+    return jobs
+
+
+def _account_exists(root: str, username: str) -> bool:
+    """Есть ли уже такая учётная запись в установленной системе."""
+    text = _donor_file(root, "etc/passwd")
+    return any(line.split(":", 1)[0] == username for line in text.splitlines())
+
+
+def _donor_file(root: str, relative: str) -> str:
+    """Системный файл того корня, который станет установленной системой.
+
+    Сначала смонтированный target — он и есть ответ. Если его нет (в dry-run
+    ничего не монтируется), берётся файл живой системы: переносится её
+    содержимое дословно, поэтому расходиться с исполнением не с чем.
+    """
+    for path in (Path(root) / relative, Path("/") / relative):
+        try:
+            return path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+    return ""
+
+
+def _target_groups(root: str) -> set[str]:
+    """Группы, которые реально есть в установленной системе.
+
+    Просить группу, которой нет, нельзя: useradd отвечает «group 'fuse' does not
+    exist», и установка обрывается на середине — когда разделы уже созданы.
+    В trixie группы fuse нет (доступ к FUSE даёт udisks2), поэтому список выше
+    фильтруется по факту, а не берётся на веру.
+    """
+    text = _donor_file(root, "etc/group")
+    return {line.split(":", 1)[0] for line in text.splitlines() if ":" in line}
+
+
+def _live_demo_user(path: str = LIVE_DEMO_MARKER) -> str:
+    """Имя live-демо учётной записи; пусто — если ставим не из нашего образа."""
+    try:
+        return Path(path).read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+
+
+def _strip_live_demo(root: str, ctx: Context) -> list[Job]:
+    """Убрать из установленной системы учётку и sudo live-демо.
+
+    Корень переносится копией живой системы, поэтому вместе с /etc/passwd на
+    диск переезжает live-пользователь с паролем «live» и файл
+    /etc/sudoers.d/byteguru-live, который даёт ему sudo без пароля. В демо-образе
+    это условие, а на установленной машине — чужая учётная запись с правами
+    root: установка не считается законченной, пока она не удалена.
+    """
+    jobs = [Job(argv=("rm", "-f", f"{root}/etc/sudoers.d/byteguru-live",
+        f"{root}{LIVE_DEMO_MARKER}"),
+        note="sudo без пароля, пришедшее из live-демо, удалено")]
+    donor = _live_demo_user()
+    if donor and donor != ctx.username:
+        jobs.append(Job(argv=_chroot(root, "userdel", "--remove", donor),
+            note=f"live-учётная запись {donor} удалена из установленной системы"))
     return jobs
 
 
@@ -362,8 +454,11 @@ def _install_efi(action, plan, ctx, state) -> list[Job]:
     return [
         Job(argv=_chroot(root, "grub-install", "--target=x86_64-efi",
             f"--efi-directory={ESP_MOUNT}", "--bootloader-id", ctx.bootloader_name,
-            "--no-nvram"),
-            note="файл загрузчика на ESP; запись в NVRAM делает следующий шаг"),
+            # Отказ прошивки принять запись в NVRAM — не редкость на «сырых»
+            # UEFI, а без этого файла машина остаётся без пути загрузки вообще:
+            # removable-путь \EFI\BOOT\BOOTX64.EFI прошивка пробует сама.
+            "--no-nvram", "--force-extra-removable"),
+            note="файл загрузчика на ESP, включая запасной removable-путь"),
         Job(argv=_chroot(root, "grub-mkconfig", "-o", "/boot/grub/grub.cfg")),
     ]
 

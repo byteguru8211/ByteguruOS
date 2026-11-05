@@ -719,3 +719,111 @@ def test_legacy_boot_refuses_without_modules():
     # UEFI-путь проверкой не задевается.
     assert planner.plan(_disk(60, ()), profile=Profile.KIOSK,
         boot_mode=BootMode.UEFI).actions
+
+
+def _root_with_accounts(tmp_path, *, passwd, group):
+    """Корень установленной системы с заданными /etc/passwd и /etc/group.
+
+    Без этого тесты читали бы файлы машины, на которой запущен pytest, и
+    «установка» зависела бы от того, какие группы есть у разработчика.
+    """
+    etc = tmp_path / "etc"
+    etc.mkdir(parents=True, exist_ok=True)
+    (etc / "passwd").write_text(passwd, encoding="utf-8")
+    (etc / "group").write_text(group, encoding="utf-8")
+    return str(tmp_path)
+
+
+def test_user_groups_are_filtered_by_what_the_system_has(tmp_path):
+    """Группа, которой нет в /etc/group, ломает установку посреди диска.
+
+    В trixie группы fuse нет (доступ к FUSE даёт udisks2), а useradd на
+    несуществующей группе отвечает ошибкой — к этому моменту разделы уже
+    созданы, и «установка не прошла» означает машину без системы.
+    """
+    root = _root_with_accounts(tmp_path,
+        passwd="root:x:0:0:root:/root:/bin/bash\n",
+        group="root:x:0:\nsudo:x:27:\nvideo:x:44:\n")
+    install_plan = planner.plan(_disk(200, ()))
+    ctx = operations.Context(target=root, username="guru", password="pw")
+    action = next(a for a in install_plan.actions if a.kind == "configure-boot")
+    jobs = operations.commands_for(action, ctx=ctx, plan=install_plan,
+        state=operations.State(disk=install_plan.disk))
+    add = next(job for job in jobs if job.argv and "useradd" in job.argv)
+    requested = add.argv[add.argv.index("--groups") + 1]
+    assert set(requested.split(",")) == {"sudo", "video"}
+
+
+def test_existing_account_is_updated_not_created(tmp_path):
+    """Имя совпало с уже существующим — учётку перенастраиваем, а не создаём.
+
+    Самый частый ввод в установщике — «byteguru», то есть имя live-пользователя,
+    которое пришло вместе с rootfs. useradd на нём падает «already exists».
+    """
+    root = _root_with_accounts(tmp_path,
+        passwd="root:x:0:0:root:/root:/bin/bash\nbyteguru:x:1000:1000::/home/byteguru:/bin/bash\n",
+        group="root:x:0\nbyteguru:x:1000:\nsudo:x:27:\n")
+    install_plan = planner.plan(_disk(200, ()))
+    ctx = operations.Context(target=root, username="byteguru", password="pw")
+    action = next(a for a in install_plan.actions if a.kind == "configure-boot")
+    jobs = operations.commands_for(action, ctx=ctx, plan=install_plan,
+        state=operations.State(disk=install_plan.disk))
+    argv = [job.argv for job in jobs if job.argv]
+    assert any("usermod" in tuple(a) for a in argv)
+    assert not any("useradd" in tuple(a) for a in argv)
+
+
+def test_live_demo_account_does_not_survive_install(tmp_path, monkeypatch):
+    """Демо-учётка live-образа не должна попадать на диск.
+
+    Вместе с rootfs переезжают /etc/passwd с пользователем «live» и файл
+    /etc/sudoers.d/byteguru-live, дающий ему sudo без пароля: установленная
+    машина с чужой учётной записью и правами root.
+    """
+    root = _root_with_accounts(tmp_path,
+        passwd="root:x:0:0:root:/root:/bin/bash\n",
+        group="root:x:0\nsudo:x:27:\n")
+    monkeypatch.setattr(operations, "_live_demo_user", lambda path="": "byteguru")
+    install_plan = planner.plan(_disk(200, ()))
+    ctx = operations.Context(target=root, username="guru", password="pw")
+    action = next(a for a in install_plan.actions if a.kind == "configure-boot")
+    jobs = operations.commands_for(action, ctx=ctx, plan=install_plan,
+        state=operations.State(disk=install_plan.disk))
+    flat = [" ".join(job.argv) for job in jobs if job.argv]
+    assert any("userdel --remove byteguru" in line for line in flat)
+    assert any(f"{root}/etc/sudoers.d/byteguru-live" in line for line in flat)
+
+
+def test_autologin_dropin_overwrites_the_live_one(tmp_path):
+    """Файл автологина пишется тем же именем, что у live-хука.
+
+    Два drop-in в одном каталоге — два ExecStart, и победит тот, что systemd
+    прочитал последним: вход начал бы зависеть от алфавита.
+    """
+    root = _root_with_accounts(tmp_path,
+        passwd="root:x:0:0:root:/root:/bin/bash\n",
+        group="root:x:0\nsudo:x:27:\n")
+    install_plan = planner.plan(_disk(200, ()))
+    ctx = operations.Context(target=root, username="guru", password="pw")
+    action = next(a for a in install_plan.actions if a.kind == "configure-boot")
+    jobs = operations.commands_for(action, ctx=ctx, plan=install_plan,
+        state=operations.State(disk=install_plan.disk))
+    written = [job.write for job in jobs if job.write]
+    path, content = next(item for item in written
+        if item[0].endswith("getty@tty1.service.d/50-byteguru-autologin.conf"))
+    assert "--autologin guru" in content
+    assert content.count("ExecStart=") == 2
+
+
+def test_efi_bootloader_also_writes_the_removable_path():
+    """--force-extra-removable: отказ прошивки принять NVRAM не должен лишать
+    машину загрузки. \\\\EFI\\\\BOOT\\\\BOOTX64.EFI — путь, который прошивка
+    пробует сама, если записей BootOrder нет.
+    """
+    install_plan = planner.plan(_disk(200, ()))
+    action = next(a for a in install_plan.actions if a.kind == "install-efi")
+    jobs = operations.commands_for(action, install_plan, operations.Context(),
+        operations.State(disk=install_plan.disk))
+    flat = [" ".join(job.argv) for job in jobs if job.argv]
+    assert any("grub-install" in line and "--force-extra-removable" in line
+        for line in flat)
