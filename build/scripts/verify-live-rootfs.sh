@@ -22,20 +22,26 @@ fail() {
 
 note "## Проверка входа в live-образ"
 
+# Имя live-пользователя берётся из того же источника, что и хук, который его
+# создаёт (0200-byteguru-live-user.chroot). Хардкод «user» пережил смену имени
+# на byteguru и докладывал «учётной записи нет» про полностью рабочий образ —
+# проверка, которая врёт при исправном объекте, хуже отсутствующей.
+LIVE_USER="${BG_LIVE_USER:-byteguru}"
+
 if [ ! -d "${CHROOT}" ]; then
 	fail "нет каталога ${CHROOT}: стадия chroot не оставила rootfs для проверки"
 	exit 1
 fi
 
-PASSWD_LINE="$(grep -E '^user:' "${CHROOT}/etc/passwd" 2>/dev/null || true)"
+PASSWD_LINE="$(grep -E "^${LIVE_USER}:" "${CHROOT}/etc/passwd" 2>/dev/null || true)"
 if [ -z "${PASSWD_LINE}" ]; then
-	fail "в /etc/passwd нет учётной записи user"
+	fail "в /etc/passwd нет учётной записи ${LIVE_USER}"
 else
 	note "- учётная запись: \`${PASSWD_LINE}\`"
 	SHELL_FIELD="$(printf '%s' "${PASSWD_LINE}" | cut -d: -f7)"
 	if [ "${SHELL_FIELD}" != "/bin/bash" ]; then
-		# pam_succeed_if.so в /etc/pam.d/lightdm-autologin отсекает shell из
-		# nologin/false: с таким shell автологин не сработает.
+		# agetty --autologin не проходит через PAM-проверку shell, но bash
+		# нужен: именно .bash_profile запускает сеанс.
 		fail "shell пользователя — ${SHELL_FIELD}, а не /bin/bash"
 	fi
 fi
@@ -47,28 +53,35 @@ if [ ! -r "${CHROOT}/etc/shadow" ]; then
 	note "- /etc/shadow: **не читается без root** — шаг CI обязан идти под sudo"
 	echo "::warning::нет прав на ${CHROOT}/etc/shadow: вывод про пароль неинформативен"
 else
-	SHADOW_LINE="$(grep -E '^user:' "${CHROOT}/etc/shadow" 2>/dev/null || true)"
+	SHADOW_LINE="$(grep -E "^${LIVE_USER}:" "${CHROOT}/etc/shadow" 2>/dev/null || true)"
 	SHADOW_HASH="$(printf '%s' "${SHADOW_LINE}" | cut -d: -f2)"
 	case "${SHADOW_HASH}" in
 		'' | '*'* | '!'*)
-			# Автологин это не ломает: /etc/pam.d/lightdm-autologin оканчивается
-			# pam_permit.so и входит без пароля. Без хэsha не работают ручной ввод
-			# в greeter'е и sudo с паролем.
-			fail "в /etc/shadow нет рабочего хэша пароля для user (ручной вход в greeter не сработает)"
+			# agetty --autologin входит без пароля, так что сеанс поднимется и
+			# здесь. Но без хэша не работают ручной вход на другой tty, su и
+			# sudo с запросом пароля — то есть ровно то, что проверяет человек,
+			# когда «что-то пошло не так».
+			fail "в /etc/shadow нет рабочего хэша пароля для ${LIVE_USER} (su, sudo и ручной вход не сработают)"
 			;;
-		*) note "- пароль user: хэш установлен (${SHADOW_HASH:0:3}...)" ;;
+		*) note "- пароль ${LIVE_USER}: хэш установлен (${SHADOW_HASH:0:3}...)" ;;
 	esac
 fi
 
+# Достаточно ОДНОГО механизма автологина. Требовать оба — значит валить сборку
+# при исправном образе: lightdm из образа убран намеренно (свой сеанс запускает
+# getty), и проверка это пережила.
+AUTOLOGIN_FOUND=""
 for conf in \
-	etc/lightdm/lightdm.conf.d/50-byteguru-autologin.conf \
-	etc/systemd/system/getty@tty1.service.d/50-byteguru-autologin.conf; do
+	etc/systemd/system/getty@tty1.service.d/50-byteguru-autologin.conf \
+	etc/lightdm/lightdm.conf.d/50-byteguru-autologin.conf; do
 	if [ -f "${CHROOT}/${conf}" ]; then
-		note "- ${conf}: есть"
-	else
-		fail "нет ${conf}: автологин не настроен"
+		note "- автологин: ${conf}"
+		AUTOLOGIN_FOUND="yes"
 	fi
 done
+if [ -z "${AUTOLOGIN_FOUND}" ]; then
+	fail "нет ни getty-автологина, ни lightdm-конфига: на tty1 будет приглашение входа"
+fi
 
 # Локаль и раскладка: печатаем содержимое, а не только вердикт. По одному
 # «не найдено» невозможно отличить не отработавший хук от файла, перезаписанного
@@ -76,13 +89,17 @@ done
 if [ -f "${CHROOT}/etc/default/locale" ]; then
 	note "- \`/etc/default/locale\`: \`$(head -n 2 "${CHROOT}/etc/default/locale" | tr '\n' ' ')\`"
 	grep -q 'ru_RU' "${CHROOT}/etc/default/locale" ||
-		note "- локаль: **ru_RU отсутствует** — хук 0100 не применил LANG"
+		note "- локаль: **ru_RU отсутствует** — хук 1100 не применил LANG (его перезаписывает 1020-create-locales-files из live-build)"
 else
-	note "- локаль: **/etc/default/locale отсутствует** — хук 0100 не отработал"
+	note "- локаль: **/etc/default/locale отсутствует** — хук 1100 не отработал"
 fi
 
 if [ -f "${CHROOT}/etc/default/keyboard" ]; then
-	note "- \`/etc/default/keyboard\`: \`$(tr '\n' ' ' < "${CHROOT}/etc/default/keyboard")\`"
+	# Только строки вида KEY=value. Ранее файл печатался целиком через
+	# tr '\n' ' ', и в отчёте CI одна «строка» на 1800 символов с комментариями
+	# скрывала ровно то, ради чего строка и нужна, — XKBLAYOUT.
+	KEYS="$(grep -E '^[A-Z_]+=' "${CHROOT}/etc/default/keyboard" | tr '\n' ' ')"
+	note "- \`/etc/default/keyboard\`: \`${KEYS}\`"
 fi
 
 SESSIONS="$(ls "${CHROOT}/usr/share/xsessions" "${CHROOT}/usr/share/wayland-sessions" 2>/dev/null | tr '\n' ' ')"

@@ -19,7 +19,7 @@ if [ ! -d /run/live/medium ]; then
 	exit 0
 fi
 
-USER_NAME="${BG_LIVE_USER:-user}"
+USER_NAME="${BG_LIVE_USER:-byteguru}"
 RUNTIME="${BG_LIVE_RUNTIME:-/run/user/1000}"
 SOCKET="$RUNTIME/byteguru/compositor.sock"
 TRIES="${BG_LIVE_CHECK_TRIES:-90}"
