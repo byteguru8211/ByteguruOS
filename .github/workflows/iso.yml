@@ -244,7 +244,7 @@ jobs:
     name: Прогон образа в QEMU (загрузоспособность)
     needs: iso-amd64
     runs-on: ubuntu-24.04
-    timeout-minutes: 35
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
 
@@ -261,13 +261,13 @@ jobs:
           sudo apt-get install -y --no-install-recommends qemu-system-x86
 
       - name: Прогон
-        # KVM на runner есть не всегда, поэтому акселератор выбирает qemu сам
-        # (kvm → tcg). Под TCG загрузка занимает минуты, отсюда большой
-        # BOOT_TIMEOUT.
+        # KVM на GitHub-runner нет, акселератор выбирается tcg, и гость живёт
+        # в разы медленнее часов. Отсюда BOOT_TIMEOUT=2400: тест с таймаутом
+        # «пять минут» был бы красным без всякой причины.
         run: |
           set -euo pipefail
           iso="$(ls -1 build/out/*.iso | head -1)"
-          sudo BOOT_TIMEOUT=900 bash build/scripts/boot-smoke-test.sh "${iso}"
+          sudo BOOT_TIMEOUT=2400 bash build/scripts/boot-smoke-test.sh "${iso}"
 
       - name: Лог консоли при падении
         if: failure()

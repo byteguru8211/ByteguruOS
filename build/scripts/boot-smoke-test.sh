@@ -18,7 +18,12 @@ set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 LOG_PREFIX="[boot-test]"
-TIMEOUT_SECONDS="${BOOT_TIMEOUT:-300}"
+# 1200 с, а не «пара минут», по причине, которую легко проглядеть: без
+# /dev/kvm QEMU работает на TCG, и гость живёт в разы медленнее часов. На
+# машине без KVM (а GitHub-runner'ы все такие) загрузка live-образа до
+# рабочего сеанса занимает десятки минут. Тест с маленьким таймаутом
+# означал бы «красный CI без причины».
+TIMEOUT_SECONDS="${BOOT_TIMEOUT:-1200}"
 MEMORY_MB="${BOOT_MEMORY:-3072}"
 
 log() { printf '%s %s\n' "$LOG_PREFIX" "$*"; }
@@ -62,8 +67,11 @@ umount "$MNT"
 APPEND="boot=live components hostname=byteguru username=byteguru console=ttyS0,115200"
 
 log "запуск QEMU (до ${TIMEOUT_SECONDS} с), лог: $LOG"
+# q35 вместо i440FX: на i440FX под TCG ядро периодически паникует
+# «IO-APIC + timer doesn't work» — с тем же образом прогон то проходил, то
+# падал на первой же секунде. Нестабильный тест хуже отсутствующего.
 timeout --signal=SIGKILL "$TIMEOUT_SECONDS" qemu-system-x86_64 \
-	-machine accel=kvm:tcg -cpu max -smp 2 -m "$MEMORY_MB" \
+	-machine q35,accel=kvm:tcg -cpu max -smp 2 -m "$MEMORY_MB" \
 	-vga std -display none -no-reboot -no-shutdown \
 	-cdrom "$ISO" -boot d \
 	-kernel "$WORK/vmlinuz" -initrd "$WORK/initrd.img" \
